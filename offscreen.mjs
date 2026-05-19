@@ -13,7 +13,8 @@ import { pipeline, env } from './vendor/transformers.js';
     idleTimer: null
   };
 
-  const INACTIVITY_MS = 5 * 60 * 1000;
+  const IDLE_FLUSH_TIMEOUT_MS = 5 * 60 * 1000;
+  const REGION_PADDING = 12;
 
   function clearIdleFlushTimer() {
     if (MODEL_STATE.idleTimer) {
@@ -28,7 +29,7 @@ import { pipeline, env } from './vendor/transformers.js';
       flushVRAM().catch((error) => {
         console.warn('[LMT] VRAM flush failed during idle cleanup', error);
       });
-    }, INACTIVITY_MS);
+    }, IDLE_FLUSH_TIMEOUT_MS);
   }
 
   async function flushVRAM() {
@@ -135,11 +136,10 @@ import { pipeline, env } from './vendor/transformers.js';
     return boxes
       .filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30)
       .map((b) => {
-        const pad = 12;
-        const x = Math.max(0, b.minX - pad);
-        const y = Math.max(0, b.minY - pad);
-        const maxX = Math.min(width, b.maxX + pad);
-        const maxY = Math.min(height, b.maxY + pad);
+        const x = Math.max(0, b.minX - REGION_PADDING);
+        const y = Math.max(0, b.minY - REGION_PADDING);
+        const maxX = Math.min(width, b.maxX + REGION_PADDING);
+        const maxY = Math.min(height, b.maxY + REGION_PADDING);
         return {
           x,
           y,
