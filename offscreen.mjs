@@ -138,13 +138,11 @@ import { pipeline, env } from './vendor/transformers.js';
       .map((b) => {
         const x = Math.max(0, b.minX - REGION_PADDING);
         const y = Math.max(0, b.minY - REGION_PADDING);
-        const maxX = Math.min(width, b.maxX + REGION_PADDING);
-        const maxY = Math.min(height, b.maxY + REGION_PADDING);
         return {
           x,
           y,
-          width: Math.max(1, maxX - x),
-          height: Math.max(1, maxY - y)
+          width: Math.max(1, Math.min(width, b.maxX + REGION_PADDING) - Math.max(0, b.minX - REGION_PADDING)),
+          height: Math.max(1, Math.min(height, b.maxY + REGION_PADDING) - Math.max(0, b.minY - REGION_PADDING))
         };
       });
   }
