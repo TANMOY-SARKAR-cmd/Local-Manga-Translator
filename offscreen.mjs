@@ -86,6 +86,8 @@ import { pipeline, env } from './vendor/transformers.js';
     const mergeDist = 40;
     const gridSize = 10;
     const darkGrids = [];
+    // Sample a fixed 2x2 pattern inside each 10x10 grid to keep detections deterministic
+    // while still checking multiple points for dark-text likelihood.
     const sampleOffsets = [
       [2, 2],
       [7, 2],
@@ -97,8 +99,10 @@ import { pipeline, env } from './vendor/transformers.js';
       for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
         let isDark = false;
         for (const [offsetX, offsetY] of sampleOffsets) {
-          const px = Math.min(gx * gridSize + Math.min(offsetX, gridSize - 1), width - 1);
-          const py = Math.min(gy * gridSize + Math.min(offsetY, gridSize - 1), height - 1);
+          const clampedOffsetX = Math.min(offsetX, gridSize - 1);
+          const clampedOffsetY = Math.min(offsetY, gridSize - 1);
+          const px = Math.min(gx * gridSize + clampedOffsetX, width - 1);
+          const py = Math.min(gy * gridSize + clampedOffsetY, height - 1);
           const idx = (py * width + px) * 4;
           const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
           if (lum < threshold) {
