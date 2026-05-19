@@ -9,17 +9,48 @@ import { pipeline, env } from './vendor/transformers.js';
   const MODEL_STATE = {
     ocr: null,
     translator: null,
-    requestQueue: Promise.resolve()
+    requestQueue: Promise.resolve(),
+    idleTimer: null
   };
 
-  async function flushVRAM() {
-    if (MODEL_STATE.ocr) {
-      await MODEL_STATE.ocr.dispose();
-      MODEL_STATE.ocr = null;
+  const INACTIVITY_MS = 5 * 60 * 1000;
+
+  function clearIdleFlushTimer() {
+    if (MODEL_STATE.idleTimer) {
+      clearTimeout(MODEL_STATE.idleTimer);
+      MODEL_STATE.idleTimer = null;
     }
-    if (MODEL_STATE.translator) {
-      await MODEL_STATE.translator.dispose();
-      MODEL_STATE.translator = null;
+  }
+
+  function scheduleIdleFlush() {
+    clearIdleFlushTimer();
+    MODEL_STATE.idleTimer = setTimeout(() => {
+      flushVRAM().catch((error) => {
+        console.warn('[LMT] VRAM flush failed during idle cleanup', error);
+      });
+    }, INACTIVITY_MS);
+  }
+
+  async function flushVRAM() {
+    const ocr = MODEL_STATE.ocr;
+    const translator = MODEL_STATE.translator;
+    MODEL_STATE.ocr = null;
+    MODEL_STATE.translator = null;
+
+    if (ocr) {
+      try {
+        await ocr.dispose();
+      } catch (error) {
+        console.warn('[LMT] OCR dispose failed', error);
+      }
+    }
+
+    if (translator) {
+      try {
+        await translator.dispose();
+      } catch (error) {
+        console.warn('[LMT] Translator dispose failed', error);
+      }
     }
   }
 
@@ -55,16 +86,25 @@ import { pipeline, env } from './vendor/transformers.js';
     const mergeDist = 40;
     const gridSize = 10;
     const darkGrids = [];
+    const sampleOffsets = [
+      [2, 2],
+      [7, 2],
+      [2, 7],
+      [7, 7]
+    ];
 
     for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
       for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
         let isDark = false;
-        for (let i = 0; i < 4; i += 1) {
-          const px = Math.min(gx * gridSize + Math.floor(Math.random() * gridSize), width - 1);
-          const py = Math.min(gy * gridSize + Math.floor(Math.random() * gridSize), height - 1);
+        for (const [offsetX, offsetY] of sampleOffsets) {
+          const px = Math.min(gx * gridSize + Math.min(offsetX, gridSize - 1), width - 1);
+          const py = Math.min(gy * gridSize + Math.min(offsetY, gridSize - 1), height - 1);
           const idx = (py * width + px) * 4;
           const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
-          if (lum < threshold) isDark = true;
+          if (lum < threshold) {
+            isDark = true;
+            break;
+          }
         }
         if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
       }
@@ -94,11 +134,15 @@ import { pipeline, env } from './vendor/transformers.js';
       .filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30)
       .map((b) => {
         const pad = 12;
+        const x = Math.max(0, b.minX - pad);
+        const y = Math.max(0, b.minY - pad);
+        const maxX = Math.min(width, b.maxX + pad);
+        const maxY = Math.min(height, b.maxY + pad);
         return {
-          x: Math.max(0, b.minX - pad),
-          y: Math.max(0, b.minY - pad),
-          width: Math.min(width - b.minX + pad, b.maxX - b.minX + pad * 2),
-          height: Math.min(height - b.minY + pad, b.maxY - b.minY + pad * 2)
+          x,
+          y,
+          width: Math.max(1, maxX - x),
+          height: Math.max(1, maxY - y)
         };
       });
   }
@@ -233,9 +277,8 @@ import { pipeline, env } from './vendor/transformers.js';
         region.width,
         region.height
       );
-      const imageData = cropCtx.getImageData(0, 0, region.width, region.height);
 
-      const ocrResult = await MODEL_STATE.ocr(imageData);
+      const ocrResult = await MODEL_STATE.ocr(cropCanvas);
       const japaneseText = ocrResult[0]?.generated_text || '';
 
       if (japaneseText.trim().length > 0) {
@@ -265,6 +308,7 @@ import { pipeline, env } from './vendor/transformers.js';
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.target !== 'offscreen') return;
+    clearIdleFlushTimer();
 
     MODEL_STATE.requestQueue = MODEL_STATE.requestQueue
       .then(async () => {
@@ -283,8 +327,8 @@ import { pipeline, env } from './vendor/transformers.js';
         console.error('[LMT] offscreen error', error);
         sendResponse({ ok: false, error: error?.message || String(error) });
       })
-      .finally(async () => {
-        await flushVRAM();
+      .finally(() => {
+        scheduleIdleFlush();
       });
 
     return true;

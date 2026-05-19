@@ -6,7 +6,7 @@ This repository contains a fully local manga image translation extension for Chr
 
 - Manifest V3 architecture with:
   - `background.js` service worker
-  - `offscreen.html` + `offscreen.js` for WebGPU/canvas processing
+  - `offscreen.html` + `offscreen.mjs` for WebGPU/canvas processing
   - `content.js` for per-image page integration
   - `popup.html` + `popup.js` for controls
 - Local-first pipeline: detect text → OCR → translation → inpaint → overlay translated text.
@@ -24,7 +24,7 @@ This repository contains a fully local manga image translation extension for Chr
 - `/background.js`
 - `/content.js`
 - `/offscreen.html`
-- `/offscreen.js`
+- `/offscreen.mjs`
 - `/popup.html`
 - `/popup.js`
 - `/styles.css`
