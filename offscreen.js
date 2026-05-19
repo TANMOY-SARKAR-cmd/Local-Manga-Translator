@@ -1,69 +1,26 @@
 /* global MangaUtils */
+import { pipeline, env } from './vendor/transformers.js';
 
 (() => {
+  env.useBrowserCache = true;
+  env.allowLocalModels = false;
+  env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('vendor/');
+
   const MODEL_STATE = {
-    ort: null,
-    provider: 'wasm',
-    sessions: {
-      detector: null,
-      ocr: null,
-      translator: null
-    },
-    lastUsedAt: 0,
-    idleTimer: null,
+    ocr: null,
+    translator: null,
     requestQueue: Promise.resolve()
   };
 
-  const INACTIVITY_MS = 5 * 60 * 1000;
-
-  async function loadOrtRuntime() {
-    if (MODEL_STATE.ort) return MODEL_STATE.ort;
-
-    try {
-      // Prefer extension-bundled onnxruntime-web if present.
-      importScripts(chrome.runtime.getURL('vendor/ort.min.js'));
-      MODEL_STATE.ort = self.ort;
-    } catch (error) {
-      throw new Error(
-        'onnxruntime-web runtime not found. Verify vendor/ort.min.js exists, copy ONNX Runtime Web dist files into vendor/, and follow README setup.'
-      );
+  async function flushVRAM() {
+    if (MODEL_STATE.ocr) {
+      await MODEL_STATE.ocr.dispose();
+      MODEL_STATE.ocr = null;
     }
-
-    if (!MODEL_STATE.ort) {
-      throw new Error('onnxruntime-web failed to initialize.');
+    if (MODEL_STATE.translator) {
+      await MODEL_STATE.translator.dispose();
+      MODEL_STATE.translator = null;
     }
-
-    MODEL_STATE.provider = navigator.gpu ? 'webgpu' : 'wasm';
-
-    // Configure WASM path for fallback when WebGPU is unavailable.
-    if (MODEL_STATE.ort.env?.wasm) {
-      MODEL_STATE.ort.env.wasm.wasmPaths = chrome.runtime.getURL('vendor/');
-      // Keep threads low for shared-memory iGPU systems to avoid contention and RAM spikes.
-      MODEL_STATE.ort.env.wasm.numThreads = 1;
-    }
-
-    return MODEL_STATE.ort;
-  }
-
-  function touchUsage() {
-    MODEL_STATE.lastUsedAt = Date.now();
-    if (MODEL_STATE.idleTimer) {
-      clearTimeout(MODEL_STATE.idleTimer);
-    }
-
-    MODEL_STATE.idleTimer = setTimeout(() => {
-      const idleFor = Date.now() - MODEL_STATE.lastUsedAt;
-      if (idleFor >= INACTIVITY_MS) {
-        releaseModels();
-      }
-    }, INACTIVITY_MS + 2000);
-  }
-
-  function releaseModels() {
-    MODEL_STATE.sessions.detector = null;
-    MODEL_STATE.sessions.ocr = null;
-    MODEL_STATE.sessions.translator = null;
-    MODEL_STATE.ort = null;
   }
 
   async function sendProgress(tabId, requestId, status) {
@@ -73,31 +30,6 @@
       requestId,
       status
     });
-  }
-
-  async function getOrCreateSession(kind, modelUrl) {
-    if (MODEL_STATE.sessions[kind]) {
-      return MODEL_STATE.sessions[kind];
-    }
-
-    const ort = await loadOrtRuntime();
-    const modelData = await MangaUtils.fetchAndCacheModel(modelUrl);
-
-    const options = {
-      executionProviders: [MODEL_STATE.provider],
-      graphOptimizationLevel: 'all',
-      freeDimensionOverrides: {
-        batch_size: 1,
-        sequence_length: 128
-      }
-    };
-
-    if (MODEL_STATE.provider === 'wasm') {
-      options.executionProviders = ['wasm'];
-    }
-
-    MODEL_STATE.sessions[kind] = await ort.InferenceSession.create(modelData, options);
-    return MODEL_STATE.sessions[kind];
   }
 
   async function decodeToImageBitmap(dataUrl) {
@@ -116,90 +48,87 @@
     return { canvas, ctx, width, height };
   }
 
-  function detectTextRegionsHeuristic(width, height) {
-    // Lightweight fallback to stay under iGPU memory limits.
-    const boxW = Math.max(120, Math.floor(width * 0.35));
-    const boxH = Math.max(80, Math.floor(height * 0.12));
+  function detectTextRegionsHeuristic(ctx, width, height) {
+    const imgData = ctx.getImageData(0, 0, width, height).data;
     const boxes = [];
+    const threshold = 120;
+    const mergeDist = 40;
+    const gridSize = 10;
+    const darkGrids = [];
 
-    for (let y = Math.floor(height * 0.1); y < height - boxH; y += Math.floor(boxH * 1.5)) {
-      boxes.push({
-        x: Math.floor(width * 0.1),
-        y,
-        width: boxW,
-        height: boxH,
-        confidence: 0.5
-      });
-      if (boxes.length >= 6) break;
+    for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
+      for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
+        let isDark = false;
+        for (let i = 0; i < 4; i += 1) {
+          const px = Math.min(gx * gridSize + Math.floor(Math.random() * gridSize), width - 1);
+          const py = Math.min(gy * gridSize + Math.floor(Math.random() * gridSize), height - 1);
+          const idx = (py * width + px) * 4;
+          const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
+          if (lum < threshold) isDark = true;
+        }
+        if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
+      }
     }
 
-    return boxes;
+    darkGrids.forEach((cell) => {
+      let merged = false;
+      for (const box of boxes) {
+        if (
+          cell.x >= box.minX - mergeDist &&
+          cell.x <= box.maxX + mergeDist &&
+          cell.y >= box.minY - mergeDist &&
+          cell.y <= box.maxY + mergeDist
+        ) {
+          box.minX = Math.min(box.minX, cell.x);
+          box.minY = Math.min(box.minY, cell.y);
+          box.maxX = Math.max(box.maxX, cell.x + gridSize);
+          box.maxY = Math.max(box.maxY, cell.y + gridSize);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) boxes.push({ minX: cell.x, minY: cell.y, maxX: cell.x + gridSize, maxY: cell.y + gridSize });
+    });
+
+    return boxes
+      .filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30)
+      .map((b) => {
+        const pad = 12;
+        return {
+          x: Math.max(0, b.minX - pad),
+          y: Math.max(0, b.minY - pad),
+          width: Math.min(width - b.minX + pad, b.maxX - b.minX + pad * 2),
+          height: Math.min(height - b.minY + pad, b.maxY - b.minY + pad * 2)
+        };
+      });
   }
 
   function estimateBubbleFillColor(imageData, box, canvasWidth) {
     const data = imageData.data;
-    const samples = [];
-    const points = [
+    const samples = [
       [box.x, box.y],
       [box.x + box.width - 1, box.y],
       [box.x, box.y + box.height - 1],
       [box.x + box.width - 1, box.y + box.height - 1]
     ];
-
-    for (const [x, y] of points) {
+    const avg = [0, 0, 0, 0];
+    for (const [x, y] of samples) {
       const idx = (Math.floor(y) * canvasWidth + Math.floor(x)) * 4;
-      samples.push([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+      avg[0] += data[idx];
+      avg[1] += data[idx + 1];
+      avg[2] += data[idx + 2];
+      avg[3] += data[idx + 3];
     }
-
-    const avg = samples.reduce((acc, item) => {
-      acc[0] += item[0];
-      acc[1] += item[1];
-      acc[2] += item[2];
-      acc[3] += item[3];
-      return acc;
-    }, [0, 0, 0, 0]);
-
-    return avg.map((channel) => Math.round(channel / samples.length));
-  }
-
-  function fastPatchInpaint(ctx, imageData, box) {
-    const { width, height, data } = imageData;
-    const startX = Math.max(1, box.x);
-    const startY = Math.max(1, box.y);
-    const endX = Math.min(width - 2, box.x + box.width);
-    const endY = Math.min(height - 2, box.y + box.height);
-
-    for (let y = startY; y < endY; y += 1) {
-      for (let x = startX; x < endX; x += 1) {
-        const idx = (y * width + x) * 4;
-        const left = (y * width + (x - 1)) * 4;
-        const right = (y * width + (x + 1)) * 4;
-        const up = ((y - 1) * width + x) * 4;
-        const down = ((y + 1) * width + x) * 4;
-
-        data[idx] = Math.round((data[left] + data[right] + data[up] + data[down]) / 4);
-        data[idx + 1] = Math.round((data[left + 1] + data[right + 1] + data[up + 1] + data[down + 1]) / 4);
-        data[idx + 2] = Math.round((data[left + 2] + data[right + 2] + data[up + 2] + data[down + 2]) / 4);
-      }
-    }
-
-    ctx.putImageData(imageData, 0, 0);
+    return avg.map((c) => Math.round(c / 4));
   }
 
   function inpaintRegions(ctx, boxes, mode = true) {
     if (!mode) return;
-
     const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
     for (const box of boxes) {
       const [r, g, b, a] = estimateBubbleFillColor(imageData, box, ctx.canvas.width);
-
-      const likelySolidBubble = Math.abs(r - g) < 14 && Math.abs(g - b) < 14;
-      if (likelySolidBubble) {
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`;
-        ctx.fillRect(box.x, box.y, box.width, box.height);
-      } else {
-        fastPatchInpaint(ctx, imageData, box);
-      }
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+      ctx.fillRect(box.x, box.y, box.width, box.height);
     }
   }
 
@@ -217,17 +146,11 @@
       let fontSize = Math.max(12, Math.min(42, Math.floor(box.height * 0.3)));
 
       while (fontSize > 10) {
-        // Preferred system fonts, with generic sans-serif fallback to avoid bundled webfont memory overhead.
-        ctx.font = `${fontSize}px "Noto Sans JP", "Roboto", sans-serif`;
-        const width = ctx.measureText(text).width;
-        if (direction === 'vertical' || width <= box.width - 8) break;
+        ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
+        if (direction === 'vertical' || ctx.measureText(text).width <= box.width - 8) break;
         fontSize -= 1;
       }
 
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
-      ctx.fillRect(box.x, box.y, box.width, box.height);
-
-      ctx.fillStyle = '#121212';
       const drawX = box.x + 4;
       const drawY = box.y + 4;
       ctx.strokeText(text, drawX, drawY, box.width - 8);
@@ -235,32 +158,54 @@
     });
   }
 
-  async function runOcrAndTranslationPipeline(boxes) {
-    // Placeholder low-memory path to keep architecture complete while model I/O is lazy.
-    // Real model inference happens when ONNX sessions are available.
-    // TODO: Replace with true MangaOCR + NLLB tokenization/inference once matching ONNX exports are configured.
-    return boxes.map((_, index) => `Translated text ${index + 1}`);
-  }
-
   async function processImage(payload, tabId) {
     const { requestId, sourceUrl, imageDataUrl, options } = payload;
-    touchUsage();
 
-    const hashKey = MangaUtils.hashString(`${sourceUrl}:${options.targetLang}:${options.inpaintEnabled}:${options.maxWidth}`);
+    const hashKey = MangaUtils.hashString(
+      `${sourceUrl}:${options.targetLang}:${options.inpaintEnabled}:${options.maxWidth}`
+    );
     const cached = await MangaUtils.dbGet(MangaUtils.TRANSLATION_STORE, hashKey);
     if (cached?.translatedDataUrl) {
       return { translatedDataUrl: cached.translatedDataUrl, fromCache: true };
     }
 
-    await sendProgress(tabId, requestId, 'Loading models...');
     const settings = await MangaUtils.getSettings();
 
-    // Lazy warm-up; if ONNX runtime or models are unavailable, continue with heuristics.
-    try {
-      await getOrCreateSession('ocr', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr);
-      await getOrCreateSession('translator', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator);
-    } catch (error) {
-      console.warn('[LMT] Model warm-up failed, using lightweight fallback:', error.message);
+    await sendProgress(tabId, requestId, 'Loading models to WebGPU...');
+    if (!MODEL_STATE.ocr) {
+      try {
+        MODEL_STATE.ocr = await pipeline('image-to-text', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr, {
+          device: 'webgpu',
+          dtype: 'q8'
+        });
+      } catch {
+        MODEL_STATE.ocr = await pipeline('image-to-text', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr, {
+          device: 'wasm',
+          dtype: 'q8'
+        });
+      }
+    }
+
+    if (!MODEL_STATE.translator) {
+      try {
+        MODEL_STATE.translator = await pipeline(
+          'translation',
+          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
+          {
+            device: 'webgpu',
+            dtype: 'q8'
+          }
+        );
+      } catch {
+        MODEL_STATE.translator = await pipeline(
+          'translation',
+          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
+          {
+            device: 'wasm',
+            dtype: 'q8'
+          }
+        );
+      }
     }
 
     await sendProgress(tabId, requestId, 'Preparing image...');
@@ -268,24 +213,47 @@
     const { canvas, ctx, width, height } = await imageBitmapToCanvas(bitmap, options.maxWidth || 1280);
 
     await sendProgress(tabId, requestId, 'Detecting text...');
-    let boxes = [];
-    try {
-      await getOrCreateSession('detector', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].detector);
-      boxes = detectTextRegionsHeuristic(width, height);
-    } catch {
-      boxes = detectTextRegionsHeuristic(width, height);
+    const boxes = detectTextRegionsHeuristic(ctx, width, height);
+    const translatedTextArray = [];
+
+    for (let i = 0; i < boxes.length; i += 1) {
+      await sendProgress(tabId, requestId, `Translating bubble ${i + 1}/${boxes.length}...`);
+      const region = boxes[i];
+
+      const cropCanvas = new OffscreenCanvas(region.width, region.height);
+      const cropCtx = cropCanvas.getContext('2d');
+      cropCtx.drawImage(
+        canvas,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+        0,
+        0,
+        region.width,
+        region.height
+      );
+      const imageData = cropCtx.getImageData(0, 0, region.width, region.height);
+
+      const ocrResult = await MODEL_STATE.ocr(imageData);
+      const japaneseText = ocrResult[0]?.generated_text || '';
+
+      if (japaneseText.trim().length > 0) {
+        const transResult = await MODEL_STATE.translator(japaneseText, {
+          src_lang: 'jpn_Jpan',
+          tgt_lang: options.targetLang
+        });
+        translatedTextArray.push(transResult[0]?.translation_text || '');
+      } else {
+        translatedTextArray.push('');
+      }
     }
 
-    await sendProgress(tabId, requestId, 'Translating...');
-    const translated = await runOcrAndTranslationPipeline(boxes);
-
-    await sendProgress(tabId, requestId, 'Inpainting...');
+    await sendProgress(tabId, requestId, 'Inpainting & Overlay...');
     inpaintRegions(ctx, boxes, !!options.inpaintEnabled);
+    drawTranslatedText(ctx, boxes, translatedTextArray);
 
-    await sendProgress(tabId, requestId, 'Rendering text...');
-    drawTranslatedText(ctx, boxes, translated);
-
-    const translatedBlob = await canvas.convertToBlob({ type: 'image/png', quality: 0.92 });
+    const translatedBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
     const translatedDataUrl = await MangaUtils.blobToDataURL(translatedBlob);
     await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, hashKey, {
       translatedDataUrl,
@@ -303,21 +271,20 @@
         if (message.type === 'OFFSCREEN_PROCESS_IMAGE') {
           const result = await processImage(message.payload, message.tabId);
           sendResponse(result);
-          return;
-        }
-
-        if (message.type === 'OFFSCREEN_CLEAR_MEMORY') {
-          releaseModels();
+        } else if (message.type === 'OFFSCREEN_CLEAR_MEMORY') {
+          await flushVRAM();
           await MangaUtils.dbClear(MangaUtils.TRANSLATION_STORE);
           sendResponse({ ok: true });
-          return;
+        } else {
+          sendResponse({ ok: false, error: 'Unknown offscreen message' });
         }
-
-        sendResponse({ ok: false, error: 'Unknown offscreen message' });
       })
       .catch((error) => {
         console.error('[LMT] offscreen error', error);
         sendResponse({ ok: false, error: error?.message || String(error) });
+      })
+      .finally(async () => {
+        await flushVRAM();
       });
 
     return true;

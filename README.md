@@ -15,7 +15,7 @@ This repository contains a fully local manga image translation extension for Chr
 - iGPU/RAM-aware behavior:
   - one image at a time
   - max resolution control (default 1280 px)
-  - model unload after 5 minutes of inactivity
+  - per-request VRAM flush after queue completion
   - WebGPU preferred, wasm fallback
 
 ## Folder structure
@@ -40,32 +40,23 @@ This repository contains a fully local manga image translation extension for Chr
 
 ## Model setup
 
-Models are downloaded on first use and cached locally (Cache Storage + IndexedDB).
+Models are downloaded on first use and cached locally (browser cache + IndexedDB).
 
-Default model URLs in `utils.js`:
+Default model IDs in `utils.js`:
 
-- Text detector (example):
-  - `https://huggingface.co/l0wgear/manga-text-detector-onnx/resolve/main/model.onnx`
 - Manga OCR:
-  - `https://huggingface.co/l0wgear/manga-ocr-2025-onnx/resolve/main/model.onnx`
+  - `Xenova/manga-ocr-base`
 - Translation (NLLB distilled):
-  - `https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_quantized.onnx`
+  - `Xenova/nllb-200-distilled-600M`
 
-> Note: ensure URLs point to public ONNX assets that fit your memory budget. For iGPU systems (4–8 GB shared RAM), prefer quantized models and smaller detector variants.
+## Runtime dependency
 
-## Runtime dependency for ONNX Runtime Web
+This repository vendors Transformers.js assets under `vendor/`:
 
-To keep this repo lightweight, ONNX Runtime Web runtime assets are expected under `vendor/`:
+- `vendor/transformers.js`
+- `vendor/ort-wasm-simd-threaded.jsep.wasm`
 
-- `vendor/ort.min.js`
-- `vendor/ort-wasm-simd.wasm` (and related wasm files if needed)
-
-The offscreen pipeline attempts WebGPU first and falls back to wasm.
-
-## Current implementation note
-
-The extension includes the full offscreen architecture, model download/cache flow, message pipeline, inpainting, and text rendering.  
-`runOcrAndTranslationPipeline` in `offscreen.js` is currently a placeholder path and is marked with a TODO where MangaOCR + NLLB tokenization/inference should be wired to model-specific ONNX inputs/outputs.
+The offscreen pipeline attempts WebGPU first and falls back to wasm with quantized (`q8`) model loading.
 
 ## Usage
 
