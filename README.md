@@ -1,0 +1,1 @@
+# Local-Manga-Translator
