@@ -99,10 +99,8 @@ import { pipeline, env } from './vendor/transformers.js';
       for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
         let isDark = false;
         for (const [offsetX, offsetY] of sampleOffsets) {
-          const clampedOffsetX = Math.min(offsetX, gridSize - 1);
-          const clampedOffsetY = Math.min(offsetY, gridSize - 1);
-          const px = Math.min(gx * gridSize + clampedOffsetX, width - 1);
-          const py = Math.min(gy * gridSize + clampedOffsetY, height - 1);
+          const px = Math.min(gx * gridSize + offsetX, width - 1);
+          const py = Math.min(gy * gridSize + offsetY, height - 1);
           const idx = (py * width + px) * 4;
           const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
           if (lum < threshold) {
@@ -282,6 +280,7 @@ import { pipeline, env } from './vendor/transformers.js';
         region.height
       );
 
+      // Pass the cropped canvas directly to avoid allocating/copying RGBA ImageData buffers per region.
       const ocrResult = await MODEL_STATE.ocr(cropCanvas);
       const japaneseText = ocrResult[0]?.generated_text || '';
 
