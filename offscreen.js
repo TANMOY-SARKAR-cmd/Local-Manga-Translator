@@ -24,7 +24,9 @@
       importScripts(chrome.runtime.getURL('vendor/ort.min.js'));
       MODEL_STATE.ort = self.ort;
     } catch (error) {
-      throw new Error('onnxruntime-web runtime not found. Add vendor/ort.min.js before use.');
+      throw new Error(
+        'onnxruntime-web runtime not found. Verify vendor/ort.min.js exists, copy ONNX Runtime Web dist files into vendor/, and follow README setup.'
+      );
     }
 
     if (!MODEL_STATE.ort) {
@@ -36,6 +38,7 @@
     // Configure WASM path for fallback when WebGPU is unavailable.
     if (MODEL_STATE.ort.env?.wasm) {
       MODEL_STATE.ort.env.wasm.wasmPaths = chrome.runtime.getURL('vendor/');
+      // Keep threads low for shared-memory iGPU systems to avoid contention and RAM spikes.
       MODEL_STATE.ort.env.wasm.numThreads = 1;
     }
 
@@ -214,6 +217,7 @@
       let fontSize = Math.max(12, Math.min(42, Math.floor(box.height * 0.3)));
 
       while (fontSize > 10) {
+        // Preferred system fonts, with generic sans-serif fallback to avoid bundled webfont memory overhead.
         ctx.font = `${fontSize}px "Noto Sans JP", "Roboto", sans-serif`;
         const width = ctx.measureText(text).width;
         if (direction === 'vertical' || width <= box.width - 8) break;
@@ -234,6 +238,7 @@
   async function runOcrAndTranslationPipeline(boxes) {
     // Placeholder low-memory path to keep architecture complete while model I/O is lazy.
     // Real model inference happens when ONNX sessions are available.
+    // TODO: Replace with true MangaOCR + NLLB tokenization/inference once matching ONNX exports are configured.
     return boxes.map((_, index) => `Translated text ${index + 1}`);
   }
 

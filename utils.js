@@ -7,11 +7,16 @@
     MODEL_URLS: 'modelUrls'
   };
 
+  const IMAGE_SIZE_LIMITS = {
+    DEFAULT_MAX_WIDTH: 1280,
+    MIN_WIDTH: 640,
+    MAX_WIDTH: 2048
+  };
   const DEFAULT_SETTINGS = {
     [STORAGE_KEYS.ENABLED]: true,
     [STORAGE_KEYS.TARGET_LANG]: 'eng_Latn',
     [STORAGE_KEYS.INPAINT]: true,
-    [STORAGE_KEYS.MAX_WIDTH]: 1280,
+    [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
     [STORAGE_KEYS.MODEL_URLS]: {
       detector: 'https://huggingface.co/l0wgear/manga-text-detector-onnx/resolve/main/model.onnx',
       ocr: 'https://huggingface.co/l0wgear/manga-ocr-2025-onnx/resolve/main/model.onnx',
@@ -62,6 +67,7 @@
   }
 
   function hashString(text) {
+    // FNV-1a style hash to generate short deterministic cache keys for image+settings tuples.
     let hash = 2166136261;
     for (let i = 0; i < text.length; i += 1) {
       hash ^= text.charCodeAt(i);
@@ -184,6 +190,7 @@
       STORAGE_KEYS,
       DEFAULT_SETTINGS,
       TRANSLATION_STORE,
+      IMAGE_SIZE_LIMITS,
       getSettings,
       setSettings,
       dataURLToBlob,

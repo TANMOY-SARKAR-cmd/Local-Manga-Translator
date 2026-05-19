@@ -8,11 +8,15 @@
   const translatePage = document.getElementById('translatePage');
   const clearCache = document.getElementById('clearCache');
   const status = document.getElementById('status');
+  const { DEFAULT_MAX_WIDTH, MIN_WIDTH, MAX_WIDTH } = MangaUtils.IMAGE_SIZE_LIMITS;
 
   function setStatus(text, isError = false) {
     status.textContent = text;
     status.classList.toggle('error', isError);
   }
+
+  maxImageWidth.min = String(MIN_WIDTH);
+  maxImageWidth.max = String(MAX_WIDTH);
 
   async function loadSettings() {
     const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
@@ -34,7 +38,11 @@
         [MangaUtils.STORAGE_KEYS.ENABLED]: enabled.checked,
         [MangaUtils.STORAGE_KEYS.TARGET_LANG]: targetLang.value,
         [MangaUtils.STORAGE_KEYS.INPAINT]: inpaintEnabled.checked,
-        [MangaUtils.STORAGE_KEYS.MAX_WIDTH]: MangaUtils.clamp(Number(maxImageWidth.value || 1280), 640, 2048)
+        [MangaUtils.STORAGE_KEYS.MAX_WIDTH]: MangaUtils.clamp(
+          Number(maxImageWidth.value || DEFAULT_MAX_WIDTH),
+          MIN_WIDTH,
+          MAX_WIDTH
+        )
       }
     });
   }

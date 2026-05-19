@@ -36,7 +36,7 @@ This repository contains a fully local manga image translation extension for Chr
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select this folder:
-   - `/home/runner/work/Local-Manga-Translator/Local-Manga-Translator`
+   - `path/to/Local-Manga-Translator`
 
 ## Model setup
 
@@ -61,6 +61,11 @@ To keep this repo lightweight, ONNX Runtime Web runtime assets are expected unde
 - `vendor/ort-wasm-simd.wasm` (and related wasm files if needed)
 
 The offscreen pipeline attempts WebGPU first and falls back to wasm.
+
+## Current implementation note
+
+The extension includes the full offscreen architecture, model download/cache flow, message pipeline, inpainting, and text rendering.  
+`runOcrAndTranslationPipeline` in `offscreen.js` is currently a placeholder path and is marked with a TODO where MangaOCR + NLLB tokenization/inference should be wired to model-specific ONNX inputs/outputs.
 
 ## Usage
 

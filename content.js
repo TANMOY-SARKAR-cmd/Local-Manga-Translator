@@ -1,6 +1,8 @@
 /* global MangaUtils */
 
 (() => {
+  const MIN_MANGA_IMAGE_AREA = 160000;
+
   const STATE = {
     overlays: new Map(),
     originals: new Map(),
@@ -12,7 +14,7 @@
     const height = img.naturalHeight || img.height;
     if (width < 300 || height < 300) return false;
     const area = width * height;
-    return area >= 160000;
+    return area >= MIN_MANGA_IMAGE_AREA;
   }
 
   function createOverlay(img) {
@@ -54,7 +56,14 @@
     const src = img.currentSrc || img.src;
     if (!src) throw new Error('Image source is empty.');
 
-    const response = await fetch(src, { mode: 'cors', credentials: 'omit' });
+    let response;
+    try {
+      response = await fetch(src, { mode: 'cors', credentials: 'omit' });
+    } catch (error) {
+      throw new Error(
+        `Cross-origin image access failed for ${src}. The host may block CORS requests.`
+      );
+    }
     if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
     const blob = await response.blob();
     return MangaUtils.blobToDataURL(blob);
