@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Manga Translator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="lmt-popup">
+    <div class="card">
+      <h1>Local Manga Translator</h1>
+
+      <label class="row">
+        <span>Enable extension</span>
+        <input type="checkbox" id="enabled" />
+      </label>
+
+      <label class="column">
+        <span>Target language</span>
+        <select id="targetLang">
+          <option value="eng_Latn">English</option>
+        </select>
+      </label>
+
+      <label class="row">
+        <span>Enable inpainting</span>
+        <input type="checkbox" id="inpaintEnabled" />
+      </label>
+
+      <label class="column">
+        <span>Maximum image width</span>
+        <input type="number" id="maxImageWidth" step="32" />
+      </label>
+
+      <div class="actions">
+        <button id="translatePage" class="primary">Translate images on this page</button>
+        <button id="clearCache">Clear cached models</button>
+      </div>
+
+      <p id="status" class="status"></p>
+    </div>
+
+    <script src="utils.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
