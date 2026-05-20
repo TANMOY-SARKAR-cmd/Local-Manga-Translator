@@ -285,7 +285,9 @@ import { pipeline, env } from './vendor/transformers.js';
         region.height
       );
       try {
-        const ocrResult = await MODEL_STATE.ocr(cropCanvas);
+        const blob = await cropCanvas.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
+        const regionDataUrl = await MangaUtils.blobToDataURL(blob);
+        const ocrResult = await MODEL_STATE.ocr(regionDataUrl);
         const japaneseText = ocrResult[0]?.generated_text || '';
 
         if (japaneseText.trim().length > 0) {
