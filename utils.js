@@ -55,13 +55,33 @@
     return new Blob([buffer], { type: mime });
   }
 
-  function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error);
-      reader.onload = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    });
+  async function blobToDataURL(blob) {
+    if (typeof FileReader !== 'undefined') {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error);
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    const buffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      for (let j = 0; j < chunk.length; j += 1) {
+        binary += String.fromCharCode(chunk[j]);
+      }
+    }
+    try {
+      return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
+    } catch (error) {
+      throw new Error(
+        `Failed to encode blob as base64 data URL: ${error?.message || String(error)}`
+      );
+    }
   }
 
   function hashString(text) {
