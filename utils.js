@@ -70,7 +70,10 @@
     let binary = '';
     const chunkSize = 8192;
     for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      const chunk = bytes.subarray(i, i + chunkSize);
+      for (let j = 0; j < chunk.length; j += 1) {
+        binary += String.fromCharCode(chunk[j]);
+      }
     }
     return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
   }
