@@ -1,3 +1,6 @@
+/* =========================================
+   POPUP STYLES (Scoped to the extension UI)
+   ========================================= */
 .lmt-popup {
   min-width: 320px;
   margin: 0;
@@ -7,37 +10,38 @@
   color: #1b1b1b;
 }
 
-.card {
+.lmt-popup .card {
   display: grid;
   gap: 10px;
 }
 
-h1 {
+.lmt-popup h1 {
   margin: 0;
   font-size: 18px;
 }
 
-.row,
-.column {
+.lmt-popup .row,
+.lmt-popup .column {
   display: flex;
   gap: 8px;
 }
 
-.row {
+.lmt-popup .row {
   justify-content: space-between;
   align-items: center;
 }
 
-.column {
+.lmt-popup .column {
   flex-direction: column;
 }
 
-.actions {
+.lmt-popup .actions {
   display: grid;
   gap: 8px;
 }
 
-button {
+/* This targets ONLY buttons inside your extension popup */
+.lmt-popup button {
   border: 1px solid #d0d0d0;
   border-radius: 6px;
   background: white;
@@ -45,23 +49,28 @@ button {
   cursor: pointer;
 }
 
-button.primary {
+.lmt-popup button.primary {
   background: #1f66ff;
   border-color: #1f66ff;
   color: #fff;
 }
 
-.status {
+.lmt-popup .status {
   margin: 0;
   min-height: 16px;
   font-size: 12px;
   color: #454545;
 }
 
-.status.error {
+.lmt-popup .status.error {
   color: #b91c1c;
 }
 
+
+/* =========================================
+   HOST PAGE STYLES (Injected into websites)
+   ========================================= */
+/* We leave this one alone so the "Preparing..." overlay still works on manga images */
 .lmt-overlay {
   position: absolute;
   display: flex;
