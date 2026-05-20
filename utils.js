@@ -75,7 +75,13 @@
         binary += String.fromCharCode(chunk[j]);
       }
     }
-    return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
+    try {
+      return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
+    } catch (error) {
+      throw new Error(
+        `Failed to encode blob as base64 data URL: ${error?.message || String(error)}`
+      );
+    }
   }
 
   function hashString(text) {
