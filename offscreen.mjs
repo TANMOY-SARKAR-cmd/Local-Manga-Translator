@@ -12,6 +12,7 @@ import { pipeline, env } from './vendor/transformers.js';
     requestQueue: Promise.resolve(),
     pendingCount: 0
   };
+  const REGION_PADDING = 12;
   const TEXT_BACKGROUND_COLOR = 'rgba(255, 255, 255, 0.32)';
   const TEXT_COLOR = '#121212';
 
@@ -106,11 +107,10 @@ import { pipeline, env } from './vendor/transformers.js';
     });
 
     return boxes.filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30).map((b) => {
-      const pad = 12;
-      const x = Math.max(0, b.minX - pad);
-      const y = Math.max(0, b.minY - pad);
-      const widthClamped = Math.max(1, Math.min(width, b.maxX + pad) - x);
-      const heightClamped = Math.max(1, Math.min(height, b.maxY + pad) - y);
+      const x = Math.max(0, b.minX - REGION_PADDING);
+      const y = Math.max(0, b.minY - REGION_PADDING);
+      const widthClamped = Math.max(1, Math.min(width, b.maxX + REGION_PADDING) - x);
+      const heightClamped = Math.max(1, Math.min(height, b.maxY + REGION_PADDING) - y);
       return {
         x,
         y,
@@ -298,7 +298,7 @@ import { pipeline, env } from './vendor/transformers.js';
           translatedLines.push('');
         }
       } catch (err) {
-        console.error('Inference failed:', err);
+        console.error('OCR or translation inference failed for region:', err);
         translatedLines.push('');
       }
     }

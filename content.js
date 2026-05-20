@@ -70,7 +70,9 @@
         url: src
       });
       if (response?.dataUrl) return response.dataUrl;
-      throw new Error(`Cross-origin image access failed for ${src}.`);
+      throw new Error(
+        `Could not extract image data for ${src} due to CORS restrictions or background fetch failure.`
+      );
     }
   }
 
