@@ -18,9 +18,8 @@
     [STORAGE_KEYS.INPAINT]: true,
     [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
     [STORAGE_KEYS.MODEL_URLS]: {
-      detector: 'https://huggingface.co/l0wgear/manga-text-detector-onnx/resolve/main/model.onnx',
-      ocr: 'https://huggingface.co/l0wgear/manga-ocr-2025-onnx/resolve/main/model.onnx',
-      translator: 'https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_quantized.onnx'
+      ocr: 'Xenova/manga-ocr-base',
+      translator: 'Xenova/nllb-200-distilled-600M'
     }
   };
 
