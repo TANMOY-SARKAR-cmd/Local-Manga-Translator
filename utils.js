@@ -18,12 +18,11 @@
     [STORAGE_KEYS.INPAINT]: true,
     [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
     [STORAGE_KEYS.MODEL_URLS]: {
-      ocr: 'Xenova/manga-ocr-base',
+      ocr: 'l0wgear/manga-ocr-2025-onnx',
       translator: 'Xenova/nllb-200-distilled-600M'
     }
   };
 
-  const MODEL_CACHE = 'lmt-model-cache-v1';
   const DB_NAME = 'lmt-cache-db';
   const DB_VERSION = 1;
   const TRANSLATION_STORE = 'translations';
@@ -75,58 +74,8 @@
     return (hash >>> 0).toString(16);
   }
 
-  async function fetchAndCacheModel(url, onProgress) {
-    const cache = await caches.open(MODEL_CACHE);
-    const cached = await cache.match(url);
-    if (cached) {
-      return cached.arrayBuffer();
-    }
-
-    const response = await fetch(url, { mode: 'cors' });
-    if (!response.ok) {
-      throw new Error(`Failed to download model: ${url} (${response.status})`);
-    }
-
-    const contentLength = Number(response.headers.get('content-length') || 0);
-    if (!response.body || !contentLength) {
-      await cache.put(url, response.clone());
-      return response.arrayBuffer();
-    }
-
-    const reader = response.body.getReader();
-    let received = 0;
-    const chunks = [];
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.byteLength;
-      if (onProgress) {
-        onProgress({ received, total: contentLength });
-      }
-    }
-
-    const merged = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    const finalResponse = new Response(merged, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': String(received)
-      }
-    });
-
-    await cache.put(url, finalResponse.clone());
-    return finalResponse.arrayBuffer();
-  }
-
   async function clearModelCache() {
-    await caches.delete(MODEL_CACHE);
+    await caches.delete('transformers-cache');
   }
 
   function openDB() {
@@ -195,7 +144,6 @@
       dataURLToBlob,
       blobToDataURL,
       hashString,
-      fetchAndCacheModel,
       clearModelCache,
       dbGet,
       dbSet,

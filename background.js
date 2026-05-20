@@ -135,6 +135,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      if (message?.type === 'FETCH_IMAGE_BACKGROUND' && message.url) {
+        const res = await fetch(message.url);
+        const blob = await res.blob();
+        const dataUrl = await MangaUtils.blobToDataURL(blob);
+        sendResponse({ dataUrl });
+        return;
+      }
+
       sendResponse({ ok: false, error: 'Unknown message type' });
     } catch (error) {
       sendResponse({ ok: false, error: error?.message || String(error) });

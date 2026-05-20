@@ -10,58 +10,23 @@ import { pipeline, env } from './vendor/transformers.js';
     ocr: null,
     translator: null,
     requestQueue: Promise.resolve(),
-    idleTimer: null
+    pendingCount: 0
   };
 
-  const IDLE_FLUSH_TIMEOUT_MS = 5 * 60 * 1000;
-  const REGION_PADDING = 12;
-
-  function clearIdleFlushTimer() {
-    if (MODEL_STATE.idleTimer) {
-      clearTimeout(MODEL_STATE.idleTimer);
-      MODEL_STATE.idleTimer = null;
-    }
-  }
-
-  function scheduleIdleFlush() {
-    clearIdleFlushTimer();
-    MODEL_STATE.idleTimer = setTimeout(() => {
-      flushVRAM().catch((error) => {
-        console.warn('[LMT] VRAM flush failed during idle cleanup', error);
-      });
-    }, IDLE_FLUSH_TIMEOUT_MS);
-  }
-
   async function flushVRAM() {
-    const ocr = MODEL_STATE.ocr;
-    const translator = MODEL_STATE.translator;
-    MODEL_STATE.ocr = null;
-    MODEL_STATE.translator = null;
-
-    if (ocr) {
-      try {
-        await ocr.dispose();
-      } catch (error) {
-        console.warn('[LMT] OCR dispose failed', error);
-      }
+    console.log('[LMT] Queue empty. Flushing WebGPU VRAM to stay under 2GB limit...');
+    if (MODEL_STATE.ocr) {
+      await MODEL_STATE.ocr.dispose();
+      MODEL_STATE.ocr = null;
     }
-
-    if (translator) {
-      try {
-        await translator.dispose();
-      } catch (error) {
-        console.warn('[LMT] Translator dispose failed', error);
-      }
+    if (MODEL_STATE.translator) {
+      await MODEL_STATE.translator.dispose();
+      MODEL_STATE.translator = null;
     }
   }
 
   async function sendProgress(tabId, requestId, status) {
-    await chrome.runtime.sendMessage({
-      type: 'OFFSCREEN_PROGRESS',
-      tabId,
-      requestId,
-      status
-    });
+    await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PROGRESS', tabId, requestId, status });
   }
 
   async function decodeToImageBitmap(dataUrl) {
@@ -87,27 +52,16 @@ import { pipeline, env } from './vendor/transformers.js';
     const mergeDist = 40;
     const gridSize = 10;
     const darkGrids = [];
-    // Sample a fixed 2x2 pattern inside each 10x10 grid to keep detections deterministic
-    // while still checking multiple points for dark-text likelihood.
-    const sampleOffsets = [
-      [2, 2],
-      [7, 2],
-      [2, 7],
-      [7, 7]
-    ];
 
     for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
       for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
         let isDark = false;
-        for (const [offsetX, offsetY] of sampleOffsets) {
-          const px = Math.min(gx * gridSize + offsetX, width - 1);
-          const py = Math.min(gy * gridSize + offsetY, height - 1);
+        for (let i = 0; i < 4; i += 1) {
+          const px = Math.min(gx * gridSize + Math.floor(Math.random() * gridSize), width - 1);
+          const py = Math.min(gy * gridSize + Math.floor(Math.random() * gridSize), height - 1);
           const idx = (py * width + px) * 4;
           const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
-          if (lum < threshold) {
-            isDark = true;
-            break;
-          }
+          if (lum < threshold) isDark = true;
         }
         if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
       }
@@ -130,21 +84,29 @@ import { pipeline, env } from './vendor/transformers.js';
           break;
         }
       }
-      if (!merged) boxes.push({ minX: cell.x, minY: cell.y, maxX: cell.x + gridSize, maxY: cell.y + gridSize });
+      if (!merged) {
+        boxes.push({
+          minX: cell.x,
+          minY: cell.y,
+          maxX: cell.x + gridSize,
+          maxY: cell.y + gridSize
+        });
+      }
     });
 
-    return boxes
-      .filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30)
-      .map((b) => {
-        const x = Math.max(0, b.minX - REGION_PADDING);
-        const y = Math.max(0, b.minY - REGION_PADDING);
-        return {
-          x,
-          y,
-          width: Math.max(1, Math.min(width, b.maxX + REGION_PADDING) - Math.max(0, b.minX - REGION_PADDING)),
-          height: Math.max(1, Math.min(height, b.maxY + REGION_PADDING) - Math.max(0, b.minY - REGION_PADDING))
-        };
-      });
+    return boxes.filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30).map((b) => {
+      const pad = 12;
+      const x = Math.max(0, b.minX - pad);
+      const y = Math.max(0, b.minY - pad);
+      const widthClamped = Math.max(1, Math.min(width, b.maxX + pad) - x);
+      const heightClamped = Math.max(1, Math.min(height, b.maxY + pad) - y);
+      return {
+        x,
+        y,
+        width: widthClamped,
+        height: heightClamped
+      };
+    });
   }
 
   function estimateBubbleFillColor(imageData, box, canvasWidth) {
@@ -166,13 +128,45 @@ import { pipeline, env } from './vendor/transformers.js';
     return avg.map((c) => Math.round(c / 4));
   }
 
+  function fastPatchInpaint(ctx, imageData, box) {
+    const { width, height, data } = imageData;
+    const startX = Math.max(1, box.x);
+    const startY = Math.max(1, box.y);
+    const endX = Math.min(width - 2, box.x + box.width);
+    const endY = Math.min(height - 2, box.y + box.height);
+
+    for (let y = startY; y < endY; y += 1) {
+      for (let x = startX; x < endX; x += 1) {
+        const idx = (y * width + x) * 4;
+        const left = (y * width + (x - 1)) * 4;
+        const right = (y * width + (x + 1)) * 4;
+        const up = ((y - 1) * width + x) * 4;
+        const down = ((y + 1) * width + x) * 4;
+
+        data[idx] = Math.round((data[left] + data[right] + data[up] + data[down]) / 4);
+        data[idx + 1] = Math.round(
+          (data[left + 1] + data[right + 1] + data[up + 1] + data[down + 1]) / 4
+        );
+        data[idx + 2] = Math.round(
+          (data[left + 2] + data[right + 2] + data[up + 2] + data[down + 2]) / 4
+        );
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+
   function inpaintRegions(ctx, boxes, mode = true) {
     if (!mode) return;
     const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
     for (const box of boxes) {
       const [r, g, b, a] = estimateBubbleFillColor(imageData, box, ctx.canvas.width);
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`;
-      ctx.fillRect(box.x, box.y, box.width, box.height);
+      const likelySolidBubble = Math.abs(r - g) < 14 && Math.abs(g - b) < 14;
+      if (likelySolidBubble) {
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+        ctx.fillRect(box.x, box.y, box.width, box.height);
+      } else {
+        fastPatchInpaint(ctx, imageData, box);
+      }
     }
   }
 
@@ -191,10 +185,15 @@ import { pipeline, env } from './vendor/transformers.js';
 
       while (fontSize > 10) {
         ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
-        if (direction === 'vertical' || ctx.measureText(text).width <= box.width - 8) break;
+        const textWidth = ctx.measureText(text).width;
+        if (direction === 'vertical' || textWidth <= box.width - 8) break;
         fontSize -= 1;
       }
 
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
+      ctx.fillRect(box.x, box.y, box.width, box.height);
+
+      ctx.fillStyle = '#121212';
       const drawX = box.x + 4;
       const drawY = box.y + 4;
       ctx.strokeText(text, drawX, drawY, box.width - 8);
@@ -215,18 +214,21 @@ import { pipeline, env } from './vendor/transformers.js';
 
     const settings = await MangaUtils.getSettings();
 
-    await sendProgress(tabId, requestId, 'Loading models to WebGPU...');
+    await sendProgress(tabId, requestId, 'Loading WebGPU Models...');
+
     if (!MODEL_STATE.ocr) {
       try {
-        MODEL_STATE.ocr = await pipeline('image-to-text', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr, {
-          device: 'webgpu',
-          dtype: 'q8'
-        });
-      } catch {
-        MODEL_STATE.ocr = await pipeline('image-to-text', settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr, {
-          device: 'wasm',
-          dtype: 'q8'
-        });
+        MODEL_STATE.ocr = await pipeline(
+          'image-to-text',
+          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr,
+          { device: 'webgpu', dtype: 'q8' }
+        );
+      } catch (e) {
+        MODEL_STATE.ocr = await pipeline(
+          'image-to-text',
+          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr,
+          { device: 'wasm', dtype: 'q8' }
+        );
       }
     }
 
@@ -235,19 +237,13 @@ import { pipeline, env } from './vendor/transformers.js';
         MODEL_STATE.translator = await pipeline(
           'translation',
           settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
-          {
-            device: 'webgpu',
-            dtype: 'q8'
-          }
+          { device: 'webgpu', dtype: 'q8' }
         );
-      } catch {
+      } catch (e) {
         MODEL_STATE.translator = await pipeline(
           'translation',
           settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
-          {
-            device: 'wasm',
-            dtype: 'q8'
-          }
+          { device: 'wasm', dtype: 'q8' }
         );
       }
     }
@@ -258,7 +254,7 @@ import { pipeline, env } from './vendor/transformers.js';
 
     await sendProgress(tabId, requestId, 'Detecting text...');
     const boxes = detectTextRegionsHeuristic(ctx, width, height);
-    const translatedTextArray = [];
+    const translatedLines = [];
 
     for (let i = 0; i < boxes.length; i += 1) {
       await sendProgress(tabId, requestId, `Translating bubble ${i + 1}/${boxes.length}...`);
@@ -277,28 +273,36 @@ import { pipeline, env } from './vendor/transformers.js';
         region.width,
         region.height
       );
+      const imageData = cropCtx.getImageData(0, 0, region.width, region.height);
 
-      // Pass the cropped canvas directly to avoid allocating/copying RGBA ImageData buffers per region.
-      const ocrResult = await MODEL_STATE.ocr(cropCanvas);
-      const japaneseText = ocrResult[0]?.generated_text || '';
+      try {
+        const ocrResult = await MODEL_STATE.ocr(imageData);
+        const japaneseText = ocrResult[0]?.generated_text || '';
 
-      if (japaneseText.trim().length > 0) {
-        const transResult = await MODEL_STATE.translator(japaneseText, {
-          src_lang: 'jpn_Jpan',
-          tgt_lang: options.targetLang
-        });
-        translatedTextArray.push(transResult[0]?.translation_text || '');
-      } else {
-        translatedTextArray.push('');
+        if (japaneseText.trim().length > 0) {
+          const transResult = await MODEL_STATE.translator(japaneseText, {
+            src_lang: 'jpn_Jpan',
+            tgt_lang: options.targetLang
+          });
+          translatedLines.push(transResult[0]?.translation_text || '');
+        } else {
+          translatedLines.push('');
+        }
+      } catch (err) {
+        console.error('Inference failed:', err);
+        translatedLines.push('');
       }
     }
 
-    await sendProgress(tabId, requestId, 'Inpainting & Overlay...');
+    await sendProgress(tabId, requestId, 'Inpainting...');
     inpaintRegions(ctx, boxes, !!options.inpaintEnabled);
-    drawTranslatedText(ctx, boxes, translatedTextArray);
+
+    await sendProgress(tabId, requestId, 'Rendering text...');
+    drawTranslatedText(ctx, boxes, translatedLines);
 
     const translatedBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
     const translatedDataUrl = await MangaUtils.blobToDataURL(translatedBlob);
+
     await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, hashKey, {
       translatedDataUrl,
       updatedAt: Date.now()
@@ -309,7 +313,8 @@ import { pipeline, env } from './vendor/transformers.js';
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.target !== 'offscreen') return;
-    clearIdleFlushTimer();
+
+    MODEL_STATE.pendingCount += 1;
 
     MODEL_STATE.requestQueue = MODEL_STATE.requestQueue
       .then(async () => {
@@ -328,8 +333,11 @@ import { pipeline, env } from './vendor/transformers.js';
         console.error('[LMT] offscreen error', error);
         sendResponse({ ok: false, error: error?.message || String(error) });
       })
-      .finally(() => {
-        scheduleIdleFlush();
+      .finally(async () => {
+        MODEL_STATE.pendingCount -= 1;
+        if (MODEL_STATE.pendingCount === 0) {
+          await flushVRAM();
+        }
       });
 
     return true;

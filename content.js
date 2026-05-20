@@ -56,17 +56,21 @@
     const src = img.currentSrc || img.src;
     if (!src) throw new Error('Image source is empty.');
 
-    let response;
     try {
-      response = await fetch(src, { mode: 'cors', credentials: 'omit' });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      return canvas.toDataURL('image/jpeg', 0.9);
     } catch (error) {
-      throw new Error(
-        `Cross-origin image access failed for ${src}. The host may block CORS requests.`
-      );
+      const response = await chrome.runtime.sendMessage({
+        type: 'FETCH_IMAGE_BACKGROUND',
+        url: src
+      });
+      if (response?.dataUrl) return response.dataUrl;
+      throw new Error(`Cross-origin image access failed for ${src}.`);
     }
-    if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
-    const blob = await response.blob();
-    return MangaUtils.blobToDataURL(blob);
   }
 
   function findImages() {
