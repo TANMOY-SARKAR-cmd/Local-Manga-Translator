@@ -105,7 +105,8 @@
           options: {
             targetLang: settings[MangaUtils.STORAGE_KEYS.TARGET_LANG],
             inpaintEnabled: settings[MangaUtils.STORAGE_KEYS.INPAINT],
-            maxWidth: settings[MangaUtils.STORAGE_KEYS.MAX_WIDTH]
+            maxWidth: settings[MangaUtils.STORAGE_KEYS.MAX_WIDTH],
+            modelUrls: settings[MangaUtils.STORAGE_KEYS.MODEL_URLS]
           }
         }
       });

@@ -223,21 +223,19 @@ import { pipeline, env } from './vendor/transformers.js';
       return { translatedDataUrl: cached.translatedDataUrl, fromCache: true };
     }
 
-    const settings = await MangaUtils.getSettings();
-
     await sendProgress(tabId, requestId, 'Loading WebGPU Models...');
 
     if (!MODEL_STATE.ocr) {
       try {
         MODEL_STATE.ocr = await pipeline(
           'image-to-text',
-          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr,
+          options.modelUrls.ocr,
           { device: 'webgpu', dtype: 'q8' }
         );
       } catch (e) {
         MODEL_STATE.ocr = await pipeline(
           'image-to-text',
-          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].ocr,
+          options.modelUrls.ocr,
           { device: 'wasm', dtype: 'q8' }
         );
       }
@@ -247,13 +245,13 @@ import { pipeline, env } from './vendor/transformers.js';
       try {
         MODEL_STATE.translator = await pipeline(
           'translation',
-          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
+          options.modelUrls.translator,
           { device: 'webgpu', dtype: 'q8' }
         );
       } catch (e) {
         MODEL_STATE.translator = await pipeline(
           'translation',
-          settings[MangaUtils.STORAGE_KEYS.MODEL_URLS].translator,
+          options.modelUrls.translator,
           { device: 'wasm', dtype: 'q8' }
         );
       }
