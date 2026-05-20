@@ -12,6 +12,8 @@ import { pipeline, env } from './vendor/transformers.js';
     requestQueue: Promise.resolve(),
     pendingCount: 0
   };
+  const TEXT_BACKGROUND_COLOR = 'rgba(255, 255, 255, 0.32)';
+  const TEXT_COLOR = '#121212';
 
   async function flushVRAM() {
     console.log('[LMT] Queue empty. Flushing WebGPU VRAM to stay under 2GB limit...');
@@ -52,16 +54,25 @@ import { pipeline, env } from './vendor/transformers.js';
     const mergeDist = 40;
     const gridSize = 10;
     const darkGrids = [];
+    const sampleOffsets = [
+      [2, 2],
+      [7, 2],
+      [2, 7],
+      [7, 7]
+    ];
 
     for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
       for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
         let isDark = false;
-        for (let i = 0; i < 4; i += 1) {
-          const px = Math.min(gx * gridSize + Math.floor(Math.random() * gridSize), width - 1);
-          const py = Math.min(gy * gridSize + Math.floor(Math.random() * gridSize), height - 1);
+        for (const [offsetX, offsetY] of sampleOffsets) {
+          const px = Math.min(gx * gridSize + offsetX, width - 1);
+          const py = Math.min(gy * gridSize + offsetY, height - 1);
           const idx = (py * width + px) * 4;
           const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
-          if (lum < threshold) isDark = true;
+          if (lum < threshold) {
+            isDark = true;
+            break;
+          }
         }
         if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
       }
@@ -190,10 +201,10 @@ import { pipeline, env } from './vendor/transformers.js';
         fontSize -= 1;
       }
 
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
+      ctx.fillStyle = TEXT_BACKGROUND_COLOR;
       ctx.fillRect(box.x, box.y, box.width, box.height);
 
-      ctx.fillStyle = '#121212';
+      ctx.fillStyle = TEXT_COLOR;
       const drawX = box.x + 4;
       const drawY = box.y + 4;
       ctx.strokeText(text, drawX, drawY, box.width - 8);
@@ -273,10 +284,8 @@ import { pipeline, env } from './vendor/transformers.js';
         region.width,
         region.height
       );
-      const imageData = cropCtx.getImageData(0, 0, region.width, region.height);
-
       try {
-        const ocrResult = await MODEL_STATE.ocr(imageData);
+        const ocrResult = await MODEL_STATE.ocr(cropCanvas);
         const japaneseText = ocrResult[0]?.generated_text || '';
 
         if (japaneseText.trim().length > 0) {

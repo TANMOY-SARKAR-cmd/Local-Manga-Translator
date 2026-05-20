@@ -136,7 +136,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       if (message?.type === 'FETCH_IMAGE_BACKGROUND' && message.url) {
-        const res = await fetch(message.url);
+        let parsedUrl;
+        try {
+          parsedUrl = new URL(message.url);
+        } catch {
+          sendResponse({ dataUrl: null, error: 'Invalid image URL' });
+          return;
+        }
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+          sendResponse({ dataUrl: null, error: 'Unsupported URL protocol' });
+          return;
+        }
+
+        const res = await fetch(parsedUrl.toString());
+        if (!res.ok) {
+          sendResponse({ dataUrl: null, error: `Image fetch failed (${res.status})` });
+          return;
+        }
         const blob = await res.blob();
         const dataUrl = await MangaUtils.blobToDataURL(blob);
         sendResponse({ dataUrl });
