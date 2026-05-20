@@ -283,11 +283,9 @@ import { pipeline, env } from './vendor/transformers.js';
         region.height
       );
       try {
-        // --- FIX: Safely convert the OffscreenCanvas into a base64 string ---
         const blob = await cropCanvas.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
         const regionDataUrl = await MangaUtils.blobToDataURL(blob);
 
-        // --- FIX: Pass the String (Data URL) instead of the Canvas object ---
         const ocrResult = await MODEL_STATE.ocr(regionDataUrl);
         const japaneseText = ocrResult[0]?.generated_text || '';
 
