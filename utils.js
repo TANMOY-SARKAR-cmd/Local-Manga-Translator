@@ -56,6 +56,7 @@
   }
 
   async function blobToDataURL(blob) {
+    // Standard DOM approach (works in content scripts, offscreen, popup)
     if (typeof FileReader !== 'undefined') {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -63,24 +64,17 @@
         reader.onload = () => resolve(reader.result);
         reader.readAsDataURL(blob);
       });
-    }
-
-    const buffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize);
-      for (let j = 0; j < chunk.length; j += 1) {
-        binary += String.fromCharCode(chunk[j]);
+    } 
+    // Fallback for Service Workers (background.js)
+    else {
+      const buffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const chunkSize = 8192; // Chunking prevents call stack overflow on large images
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
       }
-    }
-    try {
       return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
-    } catch (error) {
-      throw new Error(
-        `Failed to encode blob as base64 data URL: ${error?.message || String(error)}`
-      );
     }
   }
 
