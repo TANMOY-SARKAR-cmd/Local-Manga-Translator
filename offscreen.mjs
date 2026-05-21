@@ -4,7 +4,6 @@ import { pipeline, env } from './vendor/transformers.js';
 (() => {
   env.useBrowserCache = true;
   env.allowLocalModels = false;
-  env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('vendor/');
 
   const MODEL_STATE = {
     ocr: null,
