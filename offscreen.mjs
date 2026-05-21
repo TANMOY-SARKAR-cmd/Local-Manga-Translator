@@ -10,8 +10,10 @@ import { pipeline, env } from './vendor/transformers.js';
     ocr: null,
     translator: null,
     requestQueue: Promise.resolve(),
-    pendingCount: 0
+    pendingCount: 0,
+    ttlTimer: null
   };
+  const MODEL_TTL_MS = 45000;
   const REGION_PADDING = 12;
   const TEXT_BACKGROUND_COLOR = 'rgba(255, 255, 255, 0.32)';
   const TEXT_COLOR = '#121212';
@@ -48,13 +50,28 @@ import { pipeline, env } from './vendor/transformers.js';
     return { canvas, ctx, width, height };
   }
 
+function calculateIoU(box1, box2) {
+    const x1 = Math.max(box1.minX, box2.minX);
+    const y1 = Math.max(box1.minY, box2.minY);
+    const x2 = Math.min(box1.maxX, box2.maxX);
+    const y2 = Math.min(box1.maxY, box2.maxY);
+
+    if (x2 < x1 || y2 < y1) return 0.0;
+
+    const intersection = (x2 - x1) * (y2 - y1);
+    const area1 = (box1.maxX - box1.minX) * (box1.maxY - box1.minY);
+    const area2 = (box2.maxX - box2.minX) * (box2.maxY - box2.minY);
+    const union = area1 + area2 - intersection;
+
+    return intersection / union;
+  }
+
   function detectTextRegionsHeuristic(ctx, width, height) {
     const imgData = ctx.getImageData(0, 0, width, height).data;
-    const boxes = [];
-    const threshold = 120;
+    const allBoxes = [];
+    const thresholds = [80, 120, 160];
     const mergeDist = 40;
     const gridSize = 10;
-    const darkGrids = [];
     const sampleOffsets = [
       [2, 2],
       [7, 2],
@@ -62,51 +79,83 @@ import { pipeline, env } from './vendor/transformers.js';
       [7, 7]
     ];
 
-    for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
-      for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
-        let isDark = false;
-        for (const [offsetX, offsetY] of sampleOffsets) {
-          const px = Math.min(gx * gridSize + offsetX, width - 1);
-          const py = Math.min(gy * gridSize + offsetY, height - 1);
-          const idx = (py * width + px) * 4;
-          const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
-          if (lum < threshold) {
-            isDark = true;
+    for (const threshold of thresholds) {
+      const darkGrids = [];
+      const boxes = [];
+
+      for (let gy = 0; gy < Math.ceil(height / gridSize); gy += 1) {
+        for (let gx = 0; gx < Math.ceil(width / gridSize); gx += 1) {
+          let isDark = false;
+          for (const [offsetX, offsetY] of sampleOffsets) {
+            const px = Math.min(gx * gridSize + offsetX, width - 1);
+            const py = Math.min(gy * gridSize + offsetY, height - 1);
+            const idx = (py * width + px) * 4;
+            const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
+            if (lum < threshold) {
+              isDark = true;
+              break;
+            }
+          }
+          if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
+        }
+      }
+
+      darkGrids.forEach((cell) => {
+        let merged = false;
+        for (const box of boxes) {
+          if (
+            cell.x >= box.minX - mergeDist &&
+            cell.x <= box.maxX + mergeDist &&
+            cell.y >= box.minY - mergeDist &&
+            cell.y <= box.maxY + mergeDist
+          ) {
+            box.minX = Math.min(box.minX, cell.x);
+            box.minY = Math.min(box.minY, cell.y);
+            box.maxX = Math.max(box.maxX, cell.x + gridSize);
+            box.maxY = Math.max(box.maxY, cell.y + gridSize);
+            merged = true;
             break;
           }
         }
-        if (isDark) darkGrids.push({ x: gx * gridSize, y: gy * gridSize });
-      }
+        if (!merged) {
+          boxes.push({
+            minX: cell.x,
+            minY: cell.y,
+            maxX: cell.x + gridSize,
+            maxY: cell.y + gridSize
+          });
+        }
+      });
+      allBoxes.push(...boxes);
     }
 
-    darkGrids.forEach((cell) => {
+    // Deduplicate by IoU > 0.3
+    const finalBoxes = [];
+    for (const box of allBoxes) {
       let merged = false;
-      for (const box of boxes) {
-        if (
-          cell.x >= box.minX - mergeDist &&
-          cell.x <= box.maxX + mergeDist &&
-          cell.y >= box.minY - mergeDist &&
-          cell.y <= box.maxY + mergeDist
-        ) {
-          box.minX = Math.min(box.minX, cell.x);
-          box.minY = Math.min(box.minY, cell.y);
-          box.maxX = Math.max(box.maxX, cell.x + gridSize);
-          box.maxY = Math.max(box.maxY, cell.y + gridSize);
+      for (const finalBox of finalBoxes) {
+        if (calculateIoU(box, finalBox) > 0.3) {
+          finalBox.minX = Math.min(finalBox.minX, box.minX);
+          finalBox.minY = Math.min(finalBox.minY, box.minY);
+          finalBox.maxX = Math.max(finalBox.maxX, box.maxX);
+          finalBox.maxY = Math.max(finalBox.maxY, box.maxY);
           merged = true;
           break;
         }
       }
       if (!merged) {
-        boxes.push({
-          minX: cell.x,
-          minY: cell.y,
-          maxX: cell.x + gridSize,
-          maxY: cell.y + gridSize
-        });
+        finalBoxes.push(box);
       }
-    });
+    }
 
-    return boxes.filter((b) => b.maxX - b.minX > 30 && b.maxY - b.minY > 30).map((b) => {
+    return finalBoxes.filter((b) => {
+      const boxWidth = b.maxX - b.minX;
+      const boxHeight = b.maxY - b.minY;
+      if (boxWidth <= 30 || boxHeight <= 30) return false;
+      const aspect = boxWidth / boxHeight;
+      if (aspect < 0.08 || aspect > 12) return false;
+      return true;
+    }).map((b) => {
       const x = Math.max(0, b.minX - REGION_PADDING);
       const y = Math.max(0, b.minY - REGION_PADDING);
       const widthClamped = Math.max(1, Math.min(width, b.maxX + REGION_PADDING) - x);
@@ -332,11 +381,15 @@ import { pipeline, env } from './vendor/transformers.js';
   }
 
 
-  async function loadModel(task, url) {
+async function loadModel(task, url) {
     try {
       return await pipeline(task, url, { device: 'webgpu', dtype: 'q8' });
-    } catch (e) {
-      return await pipeline(task, url, { device: 'wasm', dtype: 'q8' });
+    } catch (e1) {
+      try {
+        return await pipeline(task, url, { device: 'wasm', dtype: 'q8' });
+      } catch (e2) {
+        return await pipeline(task, url, { device: 'wasm', dtype: 'fp32' });
+      }
     }
   }
 
@@ -390,9 +443,33 @@ import { pipeline, env } from './vendor/transformers.js';
         region.width,
         region.height
       );
+
+      // OCR Preprocessing
+      const cropImgData = cropCtx.getImageData(0, 0, region.width, region.height);
+      const data = cropImgData.data;
+      let minLum = 255, maxLum = 0;
+      for (let j = 0; j < data.length; j += 4) {
+        const lum = 0.299 * data[j] + 0.587 * data[j+1] + 0.114 * data[j+2];
+        if (lum < minLum) minLum = lum;
+        if (lum > maxLum) maxLum = lum;
+      }
+
+      if (maxLum - minLum < 100 && maxLum > minLum) {
+        const scale = 255 / (maxLum - minLum);
+        for (let j = 0; j < data.length; j += 4) {
+          const lum = 0.299 * data[j] + 0.587 * data[j+1] + 0.114 * data[j+2];
+          const newLum = Math.max(0, Math.min(255, (lum - minLum) * scale));
+          const ratio = newLum / (lum || 1);
+          data[j] = Math.min(255, data[j] * ratio);
+          data[j+1] = Math.min(255, data[j+1] * ratio);
+          data[j+2] = Math.min(255, data[j+2] * ratio);
+        }
+        cropCtx.putImageData(cropImgData, 0, 0);
+      }
+
       try {
         // --- FIX: Safely convert the OffscreenCanvas into a base64 string ---
-        const blob = await cropCanvas.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
+        const blob = await cropCanvas.convertToBlob({ type: 'image/png' });
         const regionDataUrl = await MangaUtils.blobToDataURL(blob);
 
         // --- FIX: Pass the String (Data URL) instead of the Canvas object ---
@@ -435,6 +512,11 @@ import { pipeline, env } from './vendor/transformers.js';
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.target !== 'offscreen') return;
 
+    if (MODEL_STATE.ttlTimer) {
+      clearTimeout(MODEL_STATE.ttlTimer);
+      MODEL_STATE.ttlTimer = null;
+    }
+
     MODEL_STATE.pendingCount += 1;
 
     MODEL_STATE.requestQueue = MODEL_STATE.requestQueue
@@ -457,7 +539,12 @@ import { pipeline, env } from './vendor/transformers.js';
       .finally(async () => {
         MODEL_STATE.pendingCount -= 1;
         if (MODEL_STATE.pendingCount === 0) {
-          await flushVRAM();
+          MODEL_STATE.ttlTimer = setTimeout(async () => {
+            if (MODEL_STATE.pendingCount === 0) {
+              await flushVRAM();
+              MODEL_STATE.ttlTimer = null;
+            }
+          }, MODEL_TTL_MS);
         }
       });
 
