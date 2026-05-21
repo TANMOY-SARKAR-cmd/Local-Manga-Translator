@@ -6,11 +6,15 @@
   "permissions": [
     "storage",
     "offscreen",
-    "activeTab",
     "contextMenus"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "*://*.kumacdn.club/*",
+    "*://*.rawkuma.net/*",
+    "https://huggingface.co/*",
+    "https://cdn-lfs.huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,7 +24,7 @@
     "default_popup": "popup.html"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co https://*.huggingface.co https://*.hf.co;"
   },
   "content_scripts": [
     {

@@ -56,13 +56,9 @@
     const src = img.currentSrc || img.src;
     if (!src) throw new Error('Image source is empty.');
 
-    // Dynamically detect image type to preserve PNG/JPEG/WEBP formats
-    let mimeType = 'image/jpeg'; // Default to jpeg (handles both .jpg and .jpeg)
-    const lowerSrc = src.toLowerCase();
-    if (lowerSrc.includes('.png')) mimeType = 'image/png';
-    else if (lowerSrc.includes('.webp')) mimeType = 'image/webp';
-
     try {
+      img.crossOrigin = 'anonymous';
+
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth || img.width;
       canvas.height = img.naturalHeight || img.height;
@@ -70,7 +66,8 @@
       if (!ctx) throw new Error('Could not initialize canvas context.');
       ctx.drawImage(img, 0, 0);
 
-      // Pass the detected mimeType here instead of hardcoding 'image/jpeg'
+      let mimeType = 'image/jpeg';
+      if (src.toLowerCase().includes('.png')) mimeType = 'image/png';
       return canvas.toDataURL(mimeType, 0.9);
     } catch (error) {
       const response = await chrome.runtime.sendMessage({
@@ -78,9 +75,7 @@
         url: src
       });
       if (response?.dataUrl) return response.dataUrl;
-      throw new Error(
-        `Could not extract image data for ${src} due to CORS restrictions or background fetch failure.`
-      );
+      throw new Error(`CORS/Fetch blocked: ${src}`);
     }
   }
 
