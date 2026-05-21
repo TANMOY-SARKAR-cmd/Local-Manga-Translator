@@ -46,7 +46,10 @@
 
   function dataURLToBlob(dataURL) {
     const [meta, b64] = dataURL.split(',');
-    const mime = (meta.match(/data:(.*);base64/) || [])[1] || 'image/png';
+
+    // Change the fallback from 'image/png' to 'image/jpeg'
+    const mime = (meta.match(/data:(.*);base64/) || [])[1] || 'image/jpeg';
+
     const bytes = atob(b64);
     const buffer = new Uint8Array(bytes.length);
     for (let i = 0; i < bytes.length; i += 1) {

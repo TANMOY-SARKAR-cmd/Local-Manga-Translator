@@ -56,6 +56,12 @@
     const src = img.currentSrc || img.src;
     if (!src) throw new Error('Image source is empty.');
 
+    // Dynamically detect image type to preserve PNG/JPEG/WEBP formats
+    let mimeType = 'image/jpeg'; // Default to jpeg (handles both .jpg and .jpeg)
+    const lowerSrc = src.toLowerCase();
+    if (lowerSrc.includes('.png')) mimeType = 'image/png';
+    else if (lowerSrc.includes('.webp')) mimeType = 'image/webp';
+
     try {
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth || img.width;
@@ -63,7 +69,9 @@
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Could not initialize canvas context.');
       ctx.drawImage(img, 0, 0);
-      return canvas.toDataURL('image/jpeg', 0.9);
+
+      // Pass the detected mimeType here instead of hardcoding 'image/jpeg'
+      return canvas.toDataURL(mimeType, 0.9);
     } catch (error) {
       const response = await chrome.runtime.sendMessage({
         type: 'FETCH_IMAGE_BACKGROUND',
