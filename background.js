@@ -97,6 +97,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
+
+      if (message?.type === 'ABORT_TAB_REQUESTS') {
+        await forwardToOffscreen({ type: 'OFFSCREEN_ABORT_TAB_REQUESTS', tabId: sender.tab?.id });
+        sendResponse({ ok: true });
+        return;
+      }
+
       if (message?.type === 'PROCESS_IMAGE') {
         const result = await forwardToOffscreen({
           type: 'OFFSCREEN_PROCESS_IMAGE',

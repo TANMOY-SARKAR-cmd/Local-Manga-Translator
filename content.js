@@ -193,6 +193,80 @@
     img.dataset.lmtTranslated = '0';
   }
 
+
+  let dynamicTranslateTimer = null;
+  const dynamicallyAddedImages = new Set();
+
+  function triggerDynamicTranslation() {
+    if (dynamicTranslateTimer) {
+      clearTimeout(dynamicTranslateTimer);
+    }
+    dynamicTranslateTimer = setTimeout(async () => {
+      try {
+        const settings = await getSettings();
+        if (!settings[MangaUtils.STORAGE_KEYS.ENABLED]) {
+          dynamicallyAddedImages.clear();
+          return;
+        }
+
+        for (const img of dynamicallyAddedImages) {
+          if (!STATE.activeRequests.has(img.dataset.lmtOriginalSrc || img.src) && !img.dataset.lmtTranslated) {
+            const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            let overlay = STATE.overlays.get(requestId);
+            if (!overlay) {
+              overlay = createOverlay(img);
+              STATE.overlays.set(requestId, overlay);
+            }
+            overlay.textContent = 'Queued...';
+            sendProcessRequest(img, settings, requestId).catch(e => console.error('[LMT]', e));
+          }
+        }
+        dynamicallyAddedImages.clear();
+      } catch (e) {
+        console.error('[LMT] Dynamic translation error', e);
+      }
+    }, 500);
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    let hasNewImages = false;
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList') {
+        for (const node of mutation.addedNodes) {
+          if (node.tagName === 'IMG') {
+            if (isLikelyMangaImage(node)) {
+              dynamicallyAddedImages.add(node);
+              hasNewImages = true;
+            }
+          } else if (node.querySelectorAll) {
+            const imgs = node.querySelectorAll('img');
+            for (const img of imgs) {
+              if (isLikelyMangaImage(img)) {
+                dynamicallyAddedImages.add(img);
+                hasNewImages = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (hasNewImages) {
+      triggerDynamicTranslation();
+    }
+  });
+
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  window.addEventListener('beforeunload', () => {
+    chrome.runtime.sendMessage({ type: 'ABORT_TAB_REQUESTS' }).catch(() => {});
+  });
+
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'START_PAGE_TRANSLATION') {
       translatePage().catch((error) => console.error('[LMT]', error));
