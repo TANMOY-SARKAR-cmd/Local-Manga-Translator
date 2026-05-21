@@ -212,6 +212,15 @@ import { pipeline, env } from './vendor/transformers.js';
     });
   }
 
+
+  async function loadModel(task, url) {
+    try {
+      return await pipeline(task, url, { device: 'webgpu', dtype: 'q8' });
+    } catch (e) {
+      return await pipeline(task, url, { device: 'wasm', dtype: 'q8' });
+    }
+  }
+
   async function processImage(payload, tabId) {
     const { requestId, sourceUrl, imageDataUrl, options } = payload;
 
@@ -226,35 +235,11 @@ import { pipeline, env } from './vendor/transformers.js';
     await sendProgress(tabId, requestId, 'Loading WebGPU Models...');
 
     if (!MODEL_STATE.ocr) {
-      try {
-        MODEL_STATE.ocr = await pipeline(
-          'image-to-text',
-          options.modelUrls.ocr,
-          { device: 'webgpu', dtype: 'q8' }
-        );
-      } catch (e) {
-        MODEL_STATE.ocr = await pipeline(
-          'image-to-text',
-          options.modelUrls.ocr,
-          { device: 'wasm', dtype: 'q8' }
-        );
-      }
+      MODEL_STATE.ocr = await loadModel('image-to-text', options.modelUrls.ocr);
     }
 
     if (!MODEL_STATE.translator) {
-      try {
-        MODEL_STATE.translator = await pipeline(
-          'translation',
-          options.modelUrls.translator,
-          { device: 'webgpu', dtype: 'q8' }
-        );
-      } catch (e) {
-        MODEL_STATE.translator = await pipeline(
-          'translation',
-          options.modelUrls.translator,
-          { device: 'wasm', dtype: 'q8' }
-        );
-      }
+      MODEL_STATE.translator = await loadModel('translation', options.modelUrls.translator);
     }
 
     await sendProgress(tabId, requestId, 'Preparing image...');
