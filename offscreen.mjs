@@ -181,7 +181,7 @@ import { pipeline, env } from './vendor/transformers.js';
     }
   }
 
-  function drawTranslatedText(ctx, boxes, translatedLines) {
+  function drawTranslatedText(ctx, boxes, translatedLines, inpaintEnabled) {
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#111';
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.78)';
@@ -201,8 +201,10 @@ import { pipeline, env } from './vendor/transformers.js';
         fontSize -= 1;
       }
 
-      ctx.fillStyle = TEXT_BACKGROUND_COLOR;
-      ctx.fillRect(box.x, box.y, box.width, box.height);
+      if (!inpaintEnabled) {
+        ctx.fillStyle = TEXT_BACKGROUND_COLOR;
+        ctx.fillRect(box.x, box.y, box.width, box.height);
+      }
 
       ctx.fillStyle = TEXT_COLOR;
       const drawX = box.x + 4;
@@ -299,7 +301,7 @@ import { pipeline, env } from './vendor/transformers.js';
     inpaintRegions(ctx, boxes, !!options.inpaintEnabled);
 
     await sendProgress(tabId, requestId, 'Rendering text...');
-    drawTranslatedText(ctx, boxes, translatedLines);
+    drawTranslatedText(ctx, boxes, translatedLines, !!options.inpaintEnabled);
 
     // Use the dynamically detected mimeType instead of hardcoded 'image/jpeg'
     const translatedBlob = await canvas.convertToBlob({ type: mimeType, quality: 0.9 });
