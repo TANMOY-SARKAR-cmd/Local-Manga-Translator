@@ -224,6 +224,10 @@ import { pipeline, env } from './vendor/transformers.js';
   async function processImage(payload, tabId) {
     const { requestId, sourceUrl, imageDataUrl, options } = payload;
 
+    // Extract original image format so the output matches the input
+    const mimeMatch = imageDataUrl.match(/data:(.*);base64/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
     const hashKey = MangaUtils.hashString(
       `${sourceUrl}:${options.targetLang}:${options.inpaintEnabled}:${options.maxWidth}`
     );
@@ -297,7 +301,8 @@ import { pipeline, env } from './vendor/transformers.js';
     await sendProgress(tabId, requestId, 'Rendering text...');
     drawTranslatedText(ctx, boxes, translatedLines);
 
-    const translatedBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
+    // Use the dynamically detected mimeType instead of hardcoded 'image/jpeg'
+    const translatedBlob = await canvas.convertToBlob({ type: mimeType, quality: 0.9 });
     const translatedDataUrl = await MangaUtils.blobToDataURL(translatedBlob);
 
     await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, hashKey, {
