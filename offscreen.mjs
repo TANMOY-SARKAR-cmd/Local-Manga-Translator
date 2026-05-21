@@ -122,21 +122,40 @@ import { pipeline, env } from './vendor/transformers.js';
 
   function estimateBubbleFillColor(imageData, box, canvasWidth) {
     const data = imageData.data;
-    const samples = [
-      [box.x, box.y],
-      [box.x + box.width - 1, box.y],
-      [box.x, box.y + box.height - 1],
-      [box.x + box.width - 1, box.y + box.height - 1]
-    ];
-    const avg = [0, 0, 0, 0];
+    const samples = [];
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const x = box.x + (box.width - 1) * (col / 2);
+        const y = box.y + (box.height - 1) * (row / 2);
+        samples.push([x, y]);
+      }
+    }
+
+    let sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+    const colors = [];
+
     for (const [x, y] of samples) {
       const idx = (Math.floor(y) * canvasWidth + Math.floor(x)) * 4;
-      avg[0] += data[idx];
-      avg[1] += data[idx + 1];
-      avg[2] += data[idx + 2];
-      avg[3] += data[idx + 3];
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3];
+      colors.push([r, g, b]);
+      sumR += r; sumG += g; sumB += b; sumA += a;
     }
-    return avg.map((c) => Math.round(c / 4));
+
+    const avgR = sumR / 9;
+    const avgG = sumG / 9;
+    const avgB = sumB / 9;
+    const avgA = sumA / 9;
+
+    let varianceSum = 0;
+    for (const [r, g, b] of colors) {
+      varianceSum += Math.pow(r - avgR, 2) + Math.pow(g - avgG, 2) + Math.pow(b - avgB, 2);
+    }
+    const stdDev = Math.sqrt(varianceSum / (9 * 3));
+
+    return {
+      color: [Math.round(avgR), Math.round(avgG), Math.round(avgB), Math.round(avgA)],
+      isSolid: stdDev < 20
+    };
   }
 
   function fastPatchInpaint(ctx, imageData, box) {
@@ -146,71 +165,169 @@ import { pipeline, env } from './vendor/transformers.js';
     const endX = Math.min(width - 2, box.x + box.width);
     const endY = Math.min(height - 2, box.y + box.height);
 
+    let src = new Uint8ClampedArray(data);
+    let dst = new Uint8ClampedArray(data);
+
+    const maxIters = 15;
+    for (let iter = 0; iter < maxIters; iter++) {
+      let maxDelta = 0;
+
+      for (let y = startY; y < endY; y += 1) {
+        for (let x = startX; x < endX; x += 1) {
+          const idx = (y * width + x) * 4;
+
+          const up = ((y - 1) * width + x) * 4;
+          const down = ((y + 1) * width + x) * 4;
+          const left = (y * width + (x - 1)) * 4;
+          const right = (y * width + (x + 1)) * 4;
+
+          const upLeft = ((y - 1) * width + (x - 1)) * 4;
+          const upRight = ((y - 1) * width + (x + 1)) * 4;
+          const downLeft = ((y + 1) * width + (x - 1)) * 4;
+          const downRight = ((y + 1) * width + (x + 1)) * 4;
+
+          for (let c = 0; c < 3; c++) {
+            const sum =
+              (src[up + c] + src[down + c] + src[left + c] + src[right + c]) * 2 +
+              (src[upLeft + c] + src[upRight + c] + src[downLeft + c] + src[downRight + c]);
+
+            const newVal = Math.round(sum / 12);
+
+            const delta = Math.abs(newVal - src[idx + c]);
+            if (delta > maxDelta) maxDelta = delta;
+
+            dst[idx + c] = newVal;
+          }
+          dst[idx + 3] = src[idx + 3];
+
+          const distTop = y - box.y;
+          const distBottom = box.y + box.height - 1 - y;
+          const distLeft = x - box.x;
+          const distRight = box.x + box.width - 1 - x;
+          const minDist = Math.min(distTop, distBottom, distLeft, distRight);
+
+          if (minDist < 3) {
+             const alpha = minDist / 3.0;
+             dst[idx + 3] = Math.round(alpha * 255);
+          } else {
+             dst[idx + 3] = 255;
+          }
+        }
+      }
+
+      if (maxDelta < 2) {
+        src = dst;
+        break;
+      }
+
+      const temp = src;
+      src = dst;
+      dst = temp;
+    }
+
     for (let y = startY; y < endY; y += 1) {
       for (let x = startX; x < endX; x += 1) {
         const idx = (y * width + x) * 4;
-        const left = (y * width + (x - 1)) * 4;
-        const right = (y * width + (x + 1)) * 4;
-        const up = ((y - 1) * width + x) * 4;
-        const down = ((y + 1) * width + x) * 4;
-
-        data[idx] = Math.round((data[left] + data[right] + data[up] + data[down]) / 4);
-        data[idx + 1] = Math.round(
-          (data[left + 1] + data[right + 1] + data[up + 1] + data[down + 1]) / 4
-        );
-        data[idx + 2] = Math.round(
-          (data[left + 2] + data[right + 2] + data[up + 2] + data[down + 2]) / 4
-        );
+        data[idx] = src[idx];
+        data[idx + 1] = src[idx + 1];
+        data[idx + 2] = src[idx + 2];
+        data[idx + 3] = src[idx + 3];
       }
     }
-    ctx.putImageData(imageData, 0, 0);
   }
 
   function inpaintRegions(ctx, boxes, mode = true) {
     if (!mode) return;
     const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
     for (const box of boxes) {
-      const [r, g, b, a] = estimateBubbleFillColor(imageData, box, ctx.canvas.width);
-      const likelySolidBubble = Math.abs(r - g) < 14 && Math.abs(g - b) < 14;
-      if (likelySolidBubble) {
+      const { color, isSolid } = estimateBubbleFillColor(imageData, box, ctx.canvas.width);
+      if (isSolid) {
+        const [r, g, b, a] = color;
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`;
         ctx.fillRect(box.x, box.y, box.width, box.height);
       } else {
         fastPatchInpaint(ctx, imageData, box);
+        ctx.putImageData(imageData, 0, 0);
       }
     }
   }
-
   function drawTranslatedText(ctx, boxes, translatedLines, inpaintEnabled) {
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = '#111';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.78)';
-    ctx.lineWidth = 3;
+    ctx.textBaseline = "top";
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.78)";
 
     boxes.forEach((box, index) => {
-      const text = translatedLines[index] || '';
+      const text = translatedLines[index] || "";
       if (!text) return;
 
       const direction = MangaUtils.inferDirection(box);
-      let fontSize = Math.max(12, Math.min(42, Math.floor(box.height * 0.3)));
+      let fontSize = Math.min(42, Math.floor(box.height * 0.3), Math.floor(box.width * 0.15));
+      let lines = [];
 
-      while (fontSize > 10) {
-        ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
-        const textWidth = ctx.measureText(text).width;
-        if (direction === 'vertical' || textWidth <= box.width - 8) break;
-        fontSize -= 1;
+      const words = text.split(" ");
+
+      if (direction === "vertical") {
+        // vertical stacked characters
+      } else {
+        while (fontSize >= 10) {
+          ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
+          ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.08));
+          lines = [];
+          let currentLine = words[0];
+
+          for (let i = 1; i < words.length; i++) {
+            const word = words[i];
+            const width = ctx.measureText(currentLine + " " + word).width;
+            if (width < box.width - 8) {
+              currentLine += " " + word;
+            } else {
+              lines.push(currentLine);
+              currentLine = word;
+            }
+          }
+          lines.push(currentLine);
+
+          if (lines.length * fontSize <= box.height - 8 || fontSize === 10) {
+            break;
+          }
+          fontSize -= 1;
+        }
       }
 
-      if (!inpaintEnabled) {
-        ctx.fillStyle = TEXT_BACKGROUND_COLOR;
-        ctx.fillRect(box.x, box.y, box.width, box.height);
-      }
+      ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
+      ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.08));
 
-      ctx.fillStyle = TEXT_COLOR;
-      const drawX = box.x + 4;
-      const drawY = box.y + 4;
-      ctx.strokeText(text, drawX, drawY, box.width - 8);
-      ctx.fillText(text, drawX, drawY, box.width - 8);
+      if (direction === "vertical") {
+         const chars = text.split("");
+         const textHeight = chars.length * fontSize;
+         const startY = box.y + (box.height - textHeight) / 2;
+         const startX = box.x + (box.width - fontSize) / 2;
+
+         ctx.save();
+         for (let i = 0; i < chars.length; i++) {
+            const char = chars[i];
+            const charWidth = ctx.measureText(char).width;
+            const drawX = startX + (fontSize - charWidth) / 2;
+            const drawY = startY + (i * fontSize);
+
+            ctx.strokeText(char, drawX, drawY);
+            ctx.fillText(char, drawX, drawY);
+         }
+         ctx.restore();
+      } else {
+         const textHeight = lines.length * fontSize;
+         const startY = box.y + (box.height - textHeight) / 2;
+
+         for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const textWidth = ctx.measureText(line).width;
+            const drawX = box.x + (box.width - textWidth) / 2;
+            const drawY = startY + (i * fontSize);
+
+            ctx.strokeText(line, drawX, drawY);
+            ctx.fillText(line, drawX, drawY);
+         }
+      }
     });
   }
 
