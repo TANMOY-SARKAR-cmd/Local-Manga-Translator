@@ -1,6 +1,8 @@
 importScripts('utils.js');
 
 const OFFSCREEN_URL = 'offscreen.html';
+const RAWKUMA_REFERER = 'https://rawkuma.net/';
+const FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 let offscreenCreatingPromise = null;
 
 async function ensureDefaults() {
@@ -155,9 +157,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        const res = await fetch(parsedUrl.toString());
+        const referer = parsedUrl.hostname.endsWith('kumacdn.club') ? RAWKUMA_REFERER : `${parsedUrl.origin}/`;
+
+        const res = await fetch(parsedUrl.toString(), {
+          method: 'GET',
+          headers: {
+            Referer: referer,
+            'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
+            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+          }
+        });
         if (!res.ok) {
-          sendResponse({ dataUrl: null, error: `Image fetch failed (${res.status})` });
+          sendResponse({ dataUrl: null, error: `Server rejected fetch: ${res.status}` });
           return;
         }
         const blob = await res.blob();

@@ -21,7 +21,7 @@
     [STORAGE_KEYS.INPAINT]: true,
     [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
     [STORAGE_KEYS.MODEL_URLS]: {
-      ocr: 'l0wgear/manga-ocr-2025-onnx',
+      ocr: 'onnx-community/manga-ocr-base-ONNX',
       translator: 'Xenova/nllb-200-distilled-600M'
     }
   };
