@@ -92,18 +92,30 @@
     await caches.delete('transformers-cache');
   }
 
+  let _dbPromise = null;
   function openDB() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(TRANSLATION_STORE)) {
-          db.createObjectStore(TRANSLATION_STORE);
-        }
-      };
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-    });
+    if (!_dbPromise) {
+      _dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(TRANSLATION_STORE)) {
+            db.createObjectStore(TRANSLATION_STORE);
+          }
+        };
+        request.onerror = () => {
+          _dbPromise = null;
+          reject(request.error);
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          db.onclose = () => { _dbPromise = null; };
+          db.onversionchange = () => { db.close(); _dbPromise = null; };
+          resolve(db);
+        };
+      });
+    }
+    return _dbPromise;
   }
 
   async function dbGet(store, key) {
@@ -113,7 +125,6 @@
       const req = tx.objectStore(store).get(key);
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
-      tx.oncomplete = () => db.close();
     });
   }
 
@@ -124,7 +135,6 @@
       const req = tx.objectStore(store).put(value, key);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
-      tx.oncomplete = () => db.close();
     });
   }
 
@@ -135,7 +145,6 @@
       const req = tx.objectStore(store).clear();
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
-      tx.oncomplete = () => db.close();
     });
   }
 
