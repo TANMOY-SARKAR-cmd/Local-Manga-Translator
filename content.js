@@ -57,17 +57,24 @@
     if (!src) throw new Error('Image source is empty.');
 
     try {
-      img.crossOrigin = 'anonymous';
+      const corsImg = new Image();
+      corsImg.crossOrigin = 'anonymous';
+      await new Promise((resolve, reject) => {
+        corsImg.onload = resolve;
+        corsImg.onerror = () => reject(new Error('Failed to reload image with CORS.'));
+        corsImg.src = src;
+      });
 
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
+      canvas.width = corsImg.naturalWidth || img.naturalWidth || img.width;
+      canvas.height = corsImg.naturalHeight || img.naturalHeight || img.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Could not initialize canvas context.');
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(corsImg, 0, 0);
 
       let mimeType = 'image/jpeg';
       if (src.toLowerCase().includes('.png')) mimeType = 'image/png';
+      else if (src.toLowerCase().includes('.webp')) mimeType = 'image/webp';
       return canvas.toDataURL(mimeType, 0.9);
     } catch (error) {
       const response = await chrome.runtime.sendMessage({

@@ -1,6 +1,8 @@
 importScripts('utils.js');
 
 const OFFSCREEN_URL = 'offscreen.html';
+const RAWKUMA_REFERER = 'https://rawkuma.net/';
+const FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari';
 let offscreenCreatingPromise = null;
 
 async function ensureDefaults() {
@@ -158,8 +160,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const res = await fetch(parsedUrl.toString(), {
           method: 'GET',
           headers: {
-            Referer: 'https://rawkuma.net/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            Referer: RAWKUMA_REFERER,
+            'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
             Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
           }
         });
