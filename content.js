@@ -88,11 +88,15 @@
     return Array.from(document.querySelectorAll('img')).filter(isLikelyMangaImage);
   }
 
-  async function sendProcessRequest(img, settings) {
+  async function sendProcessRequest(img, settings, existingRequestId = null) {
     const originalSrc = img.src;
-    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const overlay = createOverlay(img);
-    STATE.overlays.set(requestId, overlay);
+    const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let overlay = STATE.overlays.get(requestId);
+    if (!overlay) {
+      overlay = createOverlay(img);
+      STATE.overlays.set(requestId, overlay);
+    }
+
     STATE.activeRequests.add(requestId);
 
     if (!STATE.originals.has(originalSrc)) {
@@ -146,8 +150,21 @@
     if (!settings[MangaUtils.STORAGE_KEYS.ENABLED]) return;
 
     const images = findImages();
+    const imageRequests = new Map();
+
     for (const img of images) {
-      await sendProcessRequest(img, settings);
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let overlay = STATE.overlays.get(requestId);
+      if (!overlay) {
+        overlay = createOverlay(img);
+        STATE.overlays.set(requestId, overlay);
+      }
+      overlay.textContent = 'Queued...';
+      imageRequests.set(img, requestId);
+    }
+
+    for (const img of images) {
+      await sendProcessRequest(img, settings, imageRequests.get(img));
     }
   }
 
