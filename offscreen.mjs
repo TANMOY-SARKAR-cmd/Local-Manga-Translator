@@ -347,6 +347,12 @@ function calculateIoU(box1, box2) {
       ctx.font = `bold ${fontSize}px "Noto Sans JP", sans-serif`;
       ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.08));
 
+      if (!inpaintEnabled) {
+        ctx.fillStyle = TEXT_BACKGROUND_COLOR;
+        ctx.fillRect(box.x, box.y, box.width, box.height);
+        ctx.fillStyle = TEXT_COLOR; // Reset fillStyle back for text rendering
+      }
+
       if (direction === "vertical") {
          const chars = text.split("");
          const textHeight = chars.length * fontSize;
