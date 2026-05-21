@@ -11,7 +11,8 @@ import { pipeline, env } from './vendor/transformers.js';
     translator: null,
     requestQueue: Promise.resolve(),
     pendingCount: 0,
-    ttlTimer: null
+    ttlTimer: null,
+    abortedTabs: new Set()
   };
   const MODEL_TTL_MS = 45000;
   const REGION_PADDING = 12;
@@ -394,6 +395,8 @@ async function loadModel(task, url) {
   }
 
   async function processImage(payload, tabId) {
+    if (MODEL_STATE.abortedTabs.has(tabId)) return { ok: false, error: 'Aborted', aborted: true };
+
     const { requestId, sourceUrl, imageDataUrl, options } = payload;
 
     // Extract original image format so the output matches the input
@@ -512,6 +515,15 @@ async function loadModel(task, url) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.target !== 'offscreen') return;
 
+    if (message.type === 'OFFSCREEN_ABORT_TAB_REQUESTS') {
+      MODEL_STATE.abortedTabs.add(message.tabId);
+      // Clean up after some time
+      setTimeout(() => MODEL_STATE.abortedTabs.delete(message.tabId), 60000);
+      sendResponse({ ok: true });
+      return;
+    }
+
+
     if (MODEL_STATE.ttlTimer) {
       clearTimeout(MODEL_STATE.ttlTimer);
       MODEL_STATE.ttlTimer = null;
@@ -522,7 +534,12 @@ async function loadModel(task, url) {
     MODEL_STATE.requestQueue = MODEL_STATE.requestQueue
       .then(async () => {
         if (message.type === 'OFFSCREEN_PROCESS_IMAGE') {
+          if (MODEL_STATE.abortedTabs.has(message.tabId)) {
+            sendResponse({ ok: false, error: 'Aborted', aborted: true });
+            return;
+          }
           const result = await processImage(message.payload, message.tabId);
+
           sendResponse(result);
         } else if (message.type === 'OFFSCREEN_CLEAR_MEMORY') {
           await flushVRAM();

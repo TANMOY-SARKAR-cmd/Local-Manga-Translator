@@ -7,6 +7,9 @@
     MODEL_URLS: 'modelUrls'
   };
 
+  const MAX_CACHE_SIZE_MB = 200;
+  const MAX_CACHE_ENTRIES = 500;
+
   const IMAGE_SIZE_LIMITS = {
     DEFAULT_MAX_WIDTH: 1280,
     MIN_WIDTH: 640,
@@ -131,11 +134,62 @@
     });
   }
 
+
+  async function getCacheSize() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(TRANSLATION_STORE, 'readonly');
+      const store = tx.objectStore(TRANSLATION_STORE);
+      const request = store.openCursor();
+
+      let sizeMB = 0;
+      let count = 0;
+      const entries = [];
+
+      request.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const value = cursor.value;
+          count++;
+          if (value && value.translatedDataUrl) {
+            sizeMB += (value.translatedDataUrl.length * 0.75) / (1024 * 1024);
+          }
+          entries.push({ key: cursor.key, updatedAt: value.updatedAt || 0 });
+          cursor.continue();
+        } else {
+          resolve({ sizeMB, count, entries });
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   function dbGet(store, key) {
     return withDBStore(store, 'readonly', (s) => s.get(key));
   }
 
-  function dbSet(store, key, value) {
+  async function dbSet(store, key, value) {
+    if (store === TRANSLATION_STORE) {
+      try {
+        const cacheInfo = await getCacheSize();
+        if (cacheInfo.sizeMB >= MAX_CACHE_SIZE_MB || cacheInfo.count >= MAX_CACHE_ENTRIES) {
+          cacheInfo.entries.sort((a, b) => a.updatedAt - b.updatedAt);
+          const toDeleteCount = Math.max(1, Math.floor(cacheInfo.entries.length * 0.1));
+          const toDelete = cacheInfo.entries.slice(0, toDeleteCount);
+
+          const db = await openDB();
+          await new Promise((resolve, reject) => {
+            const tx = db.transaction(store, 'readwrite');
+            const s = tx.objectStore(store);
+            toDelete.forEach(entry => s.delete(entry.key));
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to perform cache eviction', e);
+      }
+    }
     return withDBStore(store, 'readwrite', (s) => s.put(value, key));
   }
 
@@ -153,6 +207,9 @@
 
   function expose() {
     return {
+      MAX_CACHE_SIZE_MB,
+      MAX_CACHE_ENTRIES,
+      getCacheSize,
       STORAGE_KEYS,
       DEFAULT_SETTINGS,
       TRANSLATION_STORE,
