@@ -143,12 +143,16 @@
     }
   }
 
+  function findImageBySrc(srcUrl, includeOriginal = false) {
+    return Array.from(document.querySelectorAll('img')).find((node) => {
+      const current = node.currentSrc || node.src;
+      return current === srcUrl || (includeOriginal && node.dataset.lmtOriginalSrc === srcUrl);
+    });
+  }
+
   async function translateBySrc(srcUrl) {
     if (!srcUrl) return;
-    const img = Array.from(document.querySelectorAll('img')).find((node) => {
-      const current = node.currentSrc || node.src;
-      return current === srcUrl;
-    });
+    const img = findImageBySrc(srcUrl);
 
     if (!img) return;
     const settings = await getSettings();
@@ -157,10 +161,7 @@
 
   function revertBySrc(srcUrl) {
     if (!srcUrl) return;
-    const img = Array.from(document.querySelectorAll('img')).find((node) => {
-      const current = node.currentSrc || node.src;
-      return current === srcUrl || node.dataset.lmtOriginalSrc === srcUrl;
-    });
+    const img = findImageBySrc(srcUrl, true);
 
     if (!img || !img.dataset.lmtOriginalSrc) return;
     img.src = img.dataset.lmtOriginalSrc;
