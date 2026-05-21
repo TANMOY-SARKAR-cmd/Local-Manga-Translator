@@ -118,34 +118,26 @@
     return _dbPromise;
   }
 
-  async function dbGet(store, key) {
+  async function withDBStore(store, mode, callback) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readonly');
-      const req = tx.objectStore(store).get(key);
+      const tx = db.transaction(store, mode);
+      const req = callback(tx.objectStore(store));
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   }
 
-  async function dbSet(store, key, value) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readwrite');
-      const req = tx.objectStore(store).put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+  function dbGet(store, key) {
+    return withDBStore(store, 'readonly', (s) => s.get(key));
   }
 
-  async function dbClear(store) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readwrite');
-      const req = tx.objectStore(store).clear();
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+  function dbSet(store, key, value) {
+    return withDBStore(store, 'readwrite', (s) => s.put(value, key));
+  }
+
+  function dbClear(store) {
+    return withDBStore(store, 'readwrite', (s) => s.clear());
   }
 
   function inferDirection(box) {
