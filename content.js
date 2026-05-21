@@ -82,7 +82,8 @@
         url: src
       });
       if (response?.dataUrl) return response.dataUrl;
-      throw new Error(`CORS/Fetch blocked: ${src}`);
+      const reason = response?.error || 'CORS restrictions or background fetch failure';
+      throw new Error(`CORS/Fetch blocked: ${src} (${reason})`);
     }
   }
 
