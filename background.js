@@ -157,23 +157,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        const referer = parsedUrl.hostname.endsWith('kumacdn.club') ? RAWKUMA_REFERER : `${parsedUrl.origin}/`;
+        try {
+          // Disguise the background script as the manga website itself
+          const res = await fetch(parsedUrl.toString(), {
+            method: 'GET',
+            headers: {
+              Referer: RAWKUMA_REFERER,
+              Origin: 'https://rawkuma.net',
+              'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
+              Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+            }
+          });
 
-        const res = await fetch(parsedUrl.toString(), {
-          method: 'GET',
-          headers: {
-            Referer: referer,
-            'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
-            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+          if (!res.ok) {
+            sendResponse({ dataUrl: null, error: `Image fetch failed (${res.status})` });
+            return;
           }
-        });
-        if (!res.ok) {
-          sendResponse({ dataUrl: null, error: `Server rejected fetch: ${res.status}` });
-          return;
+
+          const blob = await res.blob();
+          const dataUrl = await MangaUtils.blobToDataURL(blob);
+          sendResponse({ dataUrl });
+        } catch (fetchErr) {
+          sendResponse({ dataUrl: null, error: fetchErr.message });
         }
-        const blob = await res.blob();
-        const dataUrl = await MangaUtils.blobToDataURL(blob);
-        sendResponse({ dataUrl });
         return;
       }
 
