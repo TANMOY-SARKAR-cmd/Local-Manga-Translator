@@ -1,6 +1,6 @@
 (() => {
   const STORAGE_KEYS = {
-    ENABLED: 'enabled',
+    ENABLED_DOMAINS: 'enabled_domains',
     TARGET_LANG: 'targetLang',
     INPAINT: 'inpaintEnabled',
     MAX_WIDTH: 'maxImageWidth',
@@ -27,7 +27,7 @@
   };
 
   const DEFAULT_SETTINGS = {
-    [STORAGE_KEYS.ENABLED]: true,
+    [STORAGE_KEYS.ENABLED_DOMAINS]: [],
     [STORAGE_KEYS.TARGET_LANG]: 'eng_Latn',
     [STORAGE_KEYS.INPAINT]: true,
     [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
@@ -46,6 +46,13 @@
 
   function storageSet(payload) {
     return new Promise((resolve) => chrome.storage.local.set(payload, resolve));
+  }
+
+
+  async function isDomainEnabled() {
+    const settings = await getSettings();
+    const enabledDomains = settings[STORAGE_KEYS.ENABLED_DOMAINS] || [];
+    return enabledDomains.includes(window.location.hostname);
   }
 
   async function getSettings() {
@@ -221,6 +228,7 @@
       TRANSLATION_STORE,
       IMAGE_SIZE_LIMITS,
       NETWORK_LIMITS,
+      isDomainEnabled,
       getSettings,
       setSettings,
       dataURLToBlob,

@@ -1,7 +1,7 @@
 /* global MangaUtils */
 
 (async () => {
-  const enabled = document.getElementById('enabled');
+  const toggleDomainBtn = document.getElementById('toggleDomain');
   const targetLang = document.getElementById('targetLang');
   const inpaintEnabled = document.getElementById('inpaintEnabled');
   const maxImageWidth = document.getElementById('maxImageWidth');
@@ -33,6 +33,69 @@
   serverRetries.min = String(MIN_RETRIES);
   serverRetries.max = String(MAX_RETRIES);
 
+
+  async function toggleDomain() {
+    try {
+      const hostname = await new Promise(resolve => {
+        chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+          if (tabs && tabs.length > 0 && tabs[0].url) {
+            resolve(new URL(tabs[0].url).hostname);
+          } else {
+            resolve(null);
+          }
+        });
+      });
+
+      if (!hostname) return;
+
+      const settings = await MangaUtils.getSettings();
+      let enabledDomains = settings[MangaUtils.STORAGE_KEYS.ENABLED_DOMAINS] || [];
+
+      if (enabledDomains.includes(hostname)) {
+        enabledDomains = enabledDomains.filter(d => d !== hostname);
+      } else {
+        enabledDomains.push(hostname);
+      }
+
+      await MangaUtils.setSettings({ ...settings, [MangaUtils.STORAGE_KEYS.ENABLED_DOMAINS]: enabledDomains });
+      window.close();
+    } catch (e) {
+      setStatus(e.message, true);
+    }
+  }
+
+  toggleDomainBtn.addEventListener('click', toggleDomain);
+
+  async function updateToggleText() {
+    try {
+      const hostname = await new Promise(resolve => {
+        chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+          if (tabs && tabs.length > 0 && tabs[0].url) {
+            resolve(new URL(tabs[0].url).hostname);
+          } else {
+            resolve(null);
+          }
+        });
+      });
+
+      if (!hostname) {
+        toggleDomainBtn.disabled = true;
+        toggleDomainBtn.textContent = "Unavailable";
+        return;
+      }
+
+      const settings = await MangaUtils.getSettings();
+      const enabledDomains = settings[MangaUtils.STORAGE_KEYS.ENABLED_DOMAINS] || [];
+      if (enabledDomains.includes(hostname)) {
+        toggleDomainBtn.textContent = "Disable on this site";
+      } else {
+        toggleDomainBtn.textContent = "Enable on this site";
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   async function loadSettings() {
     const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
     if (!response?.ok) {
@@ -40,7 +103,6 @@
     }
 
     const settings = response.settings;
-    enabled.checked = !!settings[MangaUtils.STORAGE_KEYS.ENABLED];
     targetLang.value = settings[MangaUtils.STORAGE_KEYS.TARGET_LANG];
     inpaintEnabled.checked = !!settings[MangaUtils.STORAGE_KEYS.INPAINT];
     maxImageWidth.value = settings[MangaUtils.STORAGE_KEYS.MAX_WIDTH];
@@ -58,7 +120,6 @@
     await chrome.runtime.sendMessage({
       type: 'SET_SETTINGS',
       settings: {
-        [MangaUtils.STORAGE_KEYS.ENABLED]: enabled.checked,
         [MangaUtils.STORAGE_KEYS.TARGET_LANG]: targetLang.value,
         [MangaUtils.STORAGE_KEYS.INPAINT]: inpaintEnabled.checked,
         [MangaUtils.STORAGE_KEYS.MAX_WIDTH]: MangaUtils.clamp(
@@ -81,7 +142,6 @@
     });
   }
 
-  enabled.addEventListener('change', () => saveSettings().catch((e) => setStatus(e.message, true)));
   targetLang.addEventListener('change', () => saveSettings().catch((e) => setStatus(e.message, true)));
   inpaintEnabled.addEventListener('change', () => saveSettings().catch((e) => setStatus(e.message, true)));
   maxImageWidth.addEventListener('change', () => saveSettings().catch((e) => setStatus(e.message, true)));
@@ -113,6 +173,7 @@
 
   try {
     await loadSettings();
+    await updateToggleText();
     setStatus('Ready');
   } catch (error) {
     setStatus(error.message, true);
