@@ -14,6 +14,7 @@ RAWKUMA_REFERER = 'https://rawkuma.net/'
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
 BLOCKED_HOSTS = {'localhost', '127.0.0.1', '::1'}
+ALLOWED_SOURCE_DOMAINS = ('kumacdn.club', 'rawkuma.net')
 
 app = FastAPI(title='Local Manga Translator Server', version='1.0.0')
 
@@ -86,6 +87,11 @@ def _validate_source_url(source_url: str):
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
             raise HTTPException(status_code=400, detail='Source URL resolves to a restricted address')
 
+    if not any(host == domain or host.endswith(f'.{domain}') for domain in ALLOWED_SOURCE_DOMAINS):
+        raise HTTPException(status_code=400, detail='Source URL domain is not allowed')
+
+    return parsed
+
 
 def _page_headers(page_url: Optional[str]):
     referer = page_url or RAWKUMA_REFERER
@@ -107,11 +113,18 @@ def _page_headers(page_url: Optional[str]):
 
 
 async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> str:
-    _validate_source_url(source_url)
+    parsed = _validate_source_url(source_url)
     headers = _page_headers(page_url)
+    host = parsed.hostname or ''
+    base_url = f'{parsed.scheme}://{host}'
+    if parsed.port:
+        base_url = f'{base_url}:{parsed.port}'
+    path_with_query = parsed.path or '/'
+    if parsed.query:
+        path_with_query = f'{path_with_query}?{parsed.query}'
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        response = await client.get(source_url, headers=headers)
+    async with httpx.AsyncClient(base_url=base_url, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
+        response = await client.get(path_with_query, headers=headers)
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f'Image fetch failed ({response.status_code})')
