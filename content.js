@@ -2,6 +2,7 @@
 
 (() => {
   const MIN_MANGA_IMAGE_AREA = 160000;
+  const CANVAS_PLACEHOLDER_SRC = 'canvas-data';
 
   const STATE = {
     overlays: new Map(),
@@ -52,8 +53,7 @@
     STATE.overlays.delete(requestId);
   }
 
-  async function imageElementToDataURL(img) {
-    const src = img.currentSrc || img.src;
+  async function imageElementToDataURL(el, src) {
     if (!src) throw new Error('Image source is empty.');
 
     try {
@@ -66,8 +66,8 @@
       });
 
       const canvas = document.createElement('canvas');
-      canvas.width = corsImg.naturalWidth || img.naturalWidth || img.width;
-      canvas.height = corsImg.naturalHeight || img.naturalHeight || img.height;
+      canvas.width = corsImg.naturalWidth || el.naturalWidth || el.width;
+      canvas.height = corsImg.naturalHeight || el.naturalHeight || el.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Could not initialize canvas context.');
       ctx.drawImage(corsImg, 0, 0);
@@ -87,28 +87,73 @@
     }
   }
 
-  function findImages() {
-    return Array.from(document.querySelectorAll('img')).filter(isLikelyMangaImage);
+  function getStandardImages() {
+    return Array.from(document.querySelectorAll('img')).filter(isLikelyMangaImage).map(img => ({
+      element: img,
+      type: 'img',
+      originalSrc: img.currentSrc || img.src
+    }));
   }
 
-  async function sendProcessRequest(img, settings, existingRequestId = null) {
-    const originalSrc = img.src;
+  function getBackgroundImages() {
+    const elements = Array.from(document.querySelectorAll('div, span, a'));
+    const validElements = [];
+
+    for (const el of elements) {
+      const style = window.getComputedStyle(el);
+      const bg = style.backgroundImage;
+
+      if (bg && bg !== 'none' && bg.startsWith('url(')) {
+        const rect = el.getBoundingClientRect();
+        if ((rect.width * rect.height) >= MIN_MANGA_IMAGE_AREA) {
+          validElements.push({
+            element: el,
+            type: 'bg',
+            originalSrc: bg.slice(4, -1).replace(/["']/g, '')
+          });
+        }
+      }
+    }
+    return validElements;
+  }
+
+  function getCanvasImages() {
+    return Array.from(document.querySelectorAll('canvas')).filter(canvas => {
+      return (canvas.width * canvas.height) >= MIN_MANGA_IMAGE_AREA;
+    }).map(canvas => ({
+      element: canvas,
+      type: 'canvas',
+      originalSrc: CANVAS_PLACEHOLDER_SRC
+    }));
+  }
+
+  async function sendProcessRequest(item, settings, existingRequestId = null) {
+    const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let overlay = STATE.overlays.get(requestId);
     if (!overlay) {
-      overlay = createOverlay(img);
+      overlay = createOverlay(element);
       STATE.overlays.set(requestId, overlay);
     }
 
     STATE.activeRequests.add(requestId);
 
-    if (!STATE.originals.has(originalSrc)) {
+    if (type !== 'canvas' && !STATE.originals.has(originalSrc)) {
       STATE.originals.set(originalSrc, originalSrc);
-      img.dataset.lmtOriginalSrc = originalSrc;
+      element.dataset.lmtOriginalSrc = originalSrc;
     }
 
     try {
-      const imageDataUrl = await imageElementToDataURL(img);
+      let imageDataUrl;
+      if (type === 'canvas') {
+        try {
+          imageDataUrl = element.toDataURL('image/jpeg', 0.9);
+        } catch (secErr) {
+          throw new Error(`Canvas is tainted by cross-origin content and cannot be read: ${secErr.message}`);
+        }
+      } else {
+        imageDataUrl = await imageElementToDataURL(element, originalSrc);
+      }
       updateOverlay(requestId, 'Detecting text...');
 
       const response = await chrome.runtime.sendMessage({
@@ -130,8 +175,24 @@
         throw new Error(response?.error || 'Failed to translate image');
       }
 
-      img.src = response.translatedDataUrl;
-      img.dataset.lmtTranslated = '1';
+      if (type === 'img') {
+        element.src = response.translatedDataUrl;
+      } else if (type === 'bg') {
+        element.style.backgroundImage = `url('${response.translatedDataUrl}')`;
+      } else if (type === 'canvas') {
+        const translatedImg = new Image();
+        translatedImg.onload = () => {
+          const ctx = element.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(translatedImg, 0, 0, element.width, element.height);
+          }
+        };
+        translatedImg.onerror = () => {
+          console.error('[LMT] Failed to load translated image onto canvas.');
+        };
+        translatedImg.src = response.translatedDataUrl;
+      }
+      element.dataset.lmtTranslated = '1';
       updateOverlay(requestId, 'Done');
     } catch (error) {
       console.error('[LMT] Translation failed:', error);
@@ -152,22 +213,29 @@
     const settings = await getSettings();
     if (!settings[MangaUtils.STORAGE_KEYS.ENABLED]) return;
 
-    const images = findImages();
+    const allTargets = [
+      ...getStandardImages(),
+      ...getBackgroundImages(),
+      ...getCanvasImages()
+    ];
+
+    const toTranslate = allTargets.filter(item => !item.element.dataset.lmtTranslated);
+
     const imageRequests = new Map();
 
-    for (const img of images) {
+    for (const item of toTranslate) {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       let overlay = STATE.overlays.get(requestId);
       if (!overlay) {
-        overlay = createOverlay(img);
+        overlay = createOverlay(item.element);
         STATE.overlays.set(requestId, overlay);
       }
       overlay.textContent = 'Queued...';
-      imageRequests.set(img, requestId);
+      imageRequests.set(item, requestId);
     }
 
-    for (const img of images) {
-      await sendProcessRequest(img, settings, imageRequests.get(img));
+    for (const item of toTranslate) {
+      await sendProcessRequest(item, settings, imageRequests.get(item));
     }
   }
 
@@ -184,7 +252,8 @@
 
     if (!img) return;
     const settings = await getSettings();
-    await sendProcessRequest(img, settings);
+    const item = { element: img, type: 'img', originalSrc: img.currentSrc || img.src };
+    await sendProcessRequest(item, settings);
   }
 
   function revertBySrc(srcUrl) {
@@ -221,7 +290,8 @@
               STATE.overlays.set(requestId, overlay);
             }
             overlay.textContent = 'Queued...';
-            sendProcessRequest(img, settings, requestId).catch(e => console.error('[LMT]', e));
+            const item = { element: img, type: 'img', originalSrc: img.currentSrc || img.src };
+            sendProcessRequest(item, settings, requestId).catch(e => console.error('[LMT]', e));
           }
         }
         dynamicallyAddedImages.clear();
