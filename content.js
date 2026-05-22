@@ -3,6 +3,8 @@
 (() => {
   const MIN_MANGA_IMAGE_AREA = 160000;
   const CANVAS_PLACEHOLDER_SRC = 'canvas-data';
+  const DISCOVERY_PORTS = [8000, 8080, 8081, 8082, 3000];
+  const DISCOVERY_TIMEOUT_MS = 500;
 
   const STATE = {
     overlays: new Map(),
@@ -100,13 +102,47 @@
     return raw.replace(/\/$/, '');
   }
 
+  async function isServerHealthy(serverBase, timeoutMs = DISCOVERY_TIMEOUT_MS) {
+    if (!serverBase) return false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${serverBase}/health`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      return !!response?.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function discoverServer() {
+    for (const port of DISCOVERY_PORTS) {
+      const base = `http://localhost:${port}`;
+      if (await isServerHealthy(base)) {
+        return base;
+      }
+    }
+    return null;
+  }
+
   async function postTranslateRequest(payload, settings, requestId) {
-    const serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
+    let serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
     const timeoutMs = Number(settings[MangaUtils.STORAGE_KEYS.SERVER_TIMEOUT_MS]) || 120000;
     const retries = Math.max(0, Number(settings[MangaUtils.STORAGE_KEYS.SERVER_RETRIES]) || 0);
     const attempts = retries + 1;
 
     let lastError = null;
+    const configuredHealthy = await isServerHealthy(serverBase);
+    if (!configuredHealthy) {
+      const discovered = await discoverServer();
+      if (discovered) {
+        serverBase = discovered;
+      }
+    }
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const controller = new AbortController();
