@@ -164,19 +164,13 @@ async def translate(req: TranslateRequest):
         raise HTTPException(status_code=500, detail=f'Translation failed: {exc}') from exc
 
 
-def allocate_server_socket() -> tuple[socket.socket, int]:
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('127.0.0.1', 0))
-    server_socket.listen(socket.SOMAXCONN)
-    return server_socket, server_socket.getsockname()[1]
+def get_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
 
 
 if __name__ == '__main__':
-    server_socket, port = allocate_server_socket()
+    port = get_free_port()
     print(f'Server starting on port: {port}')
-    try:
-        config = uvicorn.Config(app, host='127.0.0.1', port=port)
-        server = uvicorn.Server(config)
-        server.run(sockets=[server_socket])
-    finally:
-        server_socket.close()
+    uvicorn.run(app, host='127.0.0.1', port=port)
