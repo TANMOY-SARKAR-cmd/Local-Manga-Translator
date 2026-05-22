@@ -209,8 +209,21 @@
     const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    // --- 1. Generate the Cache Key ---
-    const cacheKey = await MangaUtils.hashString(originalSrc + settings[MangaUtils.STORAGE_KEYS.TARGET_LANG]);
+    // --- FIX 1: Extract Canvas Data early to create a unique ID ---
+    let imageDataUrl = null;
+    let uniqueIdentifier = originalSrc;
+
+    if (type === 'canvas') {
+      try {
+        imageDataUrl = element.toDataURL('image/jpeg', 0.9);
+        uniqueIdentifier = imageDataUrl; // Use the actual image pixels as the ID
+      } catch (secErr) {
+        throw new Error(`Canvas is tainted by cross-origin content and cannot be read: ${secErr.message}`);
+      }
+    }
+
+    // Now the cache key is truly unique, even for canvases!
+    const cacheKey = await MangaUtils.hashString(uniqueIdentifier + settings[MangaUtils.STORAGE_KEYS.TARGET_LANG]);
 
     let overlay = STATE.overlays.get(requestId);
     if (!overlay) {
@@ -226,28 +239,18 @@
     }
 
     try {
-      // --- 2. Check Cache before hitting the server ---
+      // Check Cache
       const cachedResult = await MangaUtils.dbGet(MangaUtils.TRANSLATION_STORE, cacheKey);
       if (cachedResult && cachedResult.translatedDataUrl) {
         updateOverlay(requestId, 'Loaded from cache');
         applyTranslatedImage(element, type, cachedResult.translatedDataUrl);
-        return; // EXIT EARLY! Do not hit the server.
-      }
-
-      let imageDataUrl = null;
-      if (type === 'canvas') {
-        updateOverlay(requestId, 'Encoding canvas...');
-        try {
-          imageDataUrl = element.toDataURL('image/jpeg', 0.9);
-        } catch (secErr) {
-          throw new Error(`Canvas is tainted by cross-origin content and cannot be read: ${secErr.message}`);
-        }
+        return;
       }
 
       const payload = {
         requestId,
         sourceUrl: type === 'canvas' ? null : originalSrc,
-        imageDataUrl,
+        imageDataUrl, // Use the one we extracted above
         pageUrl: window.location.href,
         targetLang: settings[MangaUtils.STORAGE_KEYS.TARGET_LANG],
         inpaintEnabled: settings[MangaUtils.STORAGE_KEYS.INPAINT],
@@ -257,7 +260,6 @@
       updateOverlay(requestId, 'Sending to server...');
       const response = await postTranslateRequest(payload, settings, requestId);
 
-      // --- 3. Save the server's response to the Cache ---
       if (response && response.translatedDataUrl) {
         await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, cacheKey, {
            translatedDataUrl: response.translatedDataUrl,
