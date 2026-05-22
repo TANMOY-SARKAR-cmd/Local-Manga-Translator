@@ -208,6 +208,10 @@
   async function sendProcessRequest(item, settings, existingRequestId = null) {
     const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // --- ADDED: 1. Generate a unique cache key based on the image and language ---
+    const cacheKey = await MangaUtils.hashString(originalSrc + settings[MangaUtils.STORAGE_KEYS.TARGET_LANG]);
+
     let overlay = STATE.overlays.get(requestId);
     if (!overlay) {
       overlay = createOverlay(element);
@@ -222,6 +226,14 @@
     }
 
     try {
+      // --- ADDED: 2. Check the local IndexedDB Cache before hitting the server ---
+      const cachedResult = await MangaUtils.dbGet(MangaUtils.TRANSLATION_STORE, cacheKey);
+      if (cachedResult && cachedResult.translatedDataUrl) {
+        updateOverlay(requestId, 'Loaded from cache');
+        applyTranslatedImage(element, type, cachedResult.translatedDataUrl);
+        return; // Exit early, skipping the server!
+      }
+
       let imageDataUrl = null;
       if (type === 'canvas') {
         updateOverlay(requestId, 'Encoding canvas...');
@@ -245,25 +257,15 @@
       updateOverlay(requestId, 'Sending to server...');
       const response = await postTranslateRequest(payload, settings, requestId);
 
-      if (type === 'img') {
-        element.src = response.translatedDataUrl;
-      } else if (type === 'bg') {
-        element.style.backgroundImage = `url('${response.translatedDataUrl}')`;
-      } else if (type === 'canvas') {
-        const translatedImg = new Image();
-        translatedImg.onload = () => {
-          const ctx = element.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(translatedImg, 0, 0, element.width, element.height);
-          }
-        };
-        translatedImg.onerror = () => {
-          console.error('[LMT] Failed to load translated image onto canvas.');
-        };
-        translatedImg.src = response.translatedDataUrl;
+      // --- ADDED: 3. Save the successful server response to the local Cache ---
+      if (response && response.translatedDataUrl) {
+        await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, cacheKey, {
+           translatedDataUrl: response.translatedDataUrl,
+           updatedAt: Date.now()
+        });
+        applyTranslatedImage(element, type, response.translatedDataUrl);
       }
-      element.dataset.lmtTranslated = '1';
-      updateOverlay(requestId, 'Done');
+
     } catch (error) {
       console.error('[LMT] Translation failed:', error);
       updateOverlay(requestId, `Failed: ${error.message}`);
@@ -271,6 +273,23 @@
       STATE.activeRequests.delete(requestId);
       setTimeout(() => removeOverlay(requestId), 1200);
     }
+  }
+
+  // --- ADDED: Helper function to keep the code clean ---
+  function applyTranslatedImage(element, type, dataUrl) {
+      if (type === 'img') {
+        element.src = dataUrl;
+      } else if (type === 'bg') {
+        element.style.backgroundImage = `url('${dataUrl}')`;
+      } else if (type === 'canvas') {
+        const translatedImg = new Image();
+        translatedImg.onload = () => {
+          const ctx = element.getContext('2d');
+          if (ctx) ctx.drawImage(translatedImg, 0, 0, element.width, element.height);
+        };
+        translatedImg.src = dataUrl;
+      }
+      element.dataset.lmtTranslated = '1';
   }
 
   async function getSettings() {
