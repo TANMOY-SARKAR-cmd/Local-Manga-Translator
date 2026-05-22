@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from model_loader import TranslationEngine
 
-load_dotenv()
+load_dotenv() # Load environment variables from .env file
 
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
