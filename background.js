@@ -164,7 +164,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             headers: {
               Referer: RAWKUMA_REFERER,
               Origin: 'https://rawkuma.net',
-              'User-Agent': navigator.userAgent || FALLBACK_USER_AGENT,
+              'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
               Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
             }
           });
