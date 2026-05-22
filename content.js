@@ -102,8 +102,17 @@
     return raw.replace(/\/$/, '');
   }
 
+  function isValidServerBase(serverBase) {
+    try {
+      const url = new URL(serverBase);
+      return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname;
+    } catch {
+      return false;
+    }
+  }
+
   async function isServerHealthy(serverBase, timeoutMs = DISCOVERY_TIMEOUT_MS) {
-    if (!serverBase) return false;
+    if (!isValidServerBase(serverBase)) return false;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -141,6 +150,8 @@
       const discovered = await discoverServer();
       if (discovered) {
         serverBase = discovered;
+      } else {
+        throw new Error('Could not find translation server.');
       }
     }
 
