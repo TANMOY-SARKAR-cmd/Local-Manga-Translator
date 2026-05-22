@@ -21,9 +21,10 @@ This repository now uses a **client-server architecture**:
 ## Extension setup
 
 1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select:
+2. Remove any old installation of this extension.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select:
    - `/home/runner/work/Local-Manga-Translator/Local-Manga-Translator`
 
 ## Server setup
@@ -34,7 +35,7 @@ This repository now uses a **client-server architecture**:
 3. Run the API:
    - `uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server`
 
-Default extension server URL is `http://127.0.0.1:8000`.
+Default extension server URL is `http://localhost:8000`.
 
 ## API
 
@@ -64,13 +65,13 @@ Returns `{ "ok": true }`.
 ## Usage
 
 1. Start the server.
-2. Open extension popup and set:
-   - Server URL
+2. Open the extension popup and verify **Server URL** is `http://localhost:8000` (or your server address).
+3. Set as needed:
    - Request timeout
    - Retry count
    - Translation options
-3. Click **Translate images on this page**.
-4. Use right-click image actions to translate or revert individual images.
+4. Click **Translate images on this page**.
+5. Use right-click image actions to translate or revert individual images.
 
 ## Validation
 
