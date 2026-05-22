@@ -280,8 +280,12 @@
   }
 
   async function translatePage() {
+    const enabled = await MangaUtils.isDomainEnabled();
+    if (!enabled) {
+      console.log('[LMT] Translation disabled for this domain.');
+      return;
+    }
     const settings = await getSettings();
-    if (!settings[MangaUtils.STORAGE_KEYS.ENABLED]) return;
 
     const allTargets = [
       ...getStandardImages(),
@@ -345,11 +349,12 @@
     }
     dynamicTranslateTimer = setTimeout(async () => {
       try {
-        const settings = await getSettings();
-        if (!settings[MangaUtils.STORAGE_KEYS.ENABLED]) {
+        const enabled = await MangaUtils.isDomainEnabled();
+        if (!enabled) {
           dynamicallyAddedImages.clear();
           return;
         }
+        const settings = await getSettings();
 
         for (const img of dynamicallyAddedImages) {
           if (!STATE.activeRequests.has(img.dataset.lmtOriginalSrc || img.src) && !img.dataset.lmtTranslated) {
