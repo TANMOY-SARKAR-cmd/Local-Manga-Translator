@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 import ipaddress
 import os
 import socket
@@ -7,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -20,7 +23,24 @@ REQUEST_TIMEOUT_SECONDS = 60
 BLOCKED_HOSTS = {'localhost', '127.0.0.1', '::1'}
 ALLOWED_SOURCE_DOMAINS = [d.strip() for d in os.getenv("ALLOWED_DOMAINS", "kumacdn.club,rawkuma.net").split(",")]
 
-app = FastAPI(title='Local Manga Translator Server', version='1.0.0')
+engine = TranslationEngine()
+
+# --- FIX 2: Create a Background Janitor Task ---
+async def memory_janitor():
+    while True:
+        await asyncio.sleep(30) # Check every 30 seconds
+        engine.cleanup_if_expired()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the janitor when the server starts
+    janitor = asyncio.create_task(memory_janitor())
+    yield
+    # Stop the janitor when the server shuts down
+    janitor.cancel()
+
+# Pass the lifespan to the FastAPI app
+app = FastAPI(title='Local Manga Translator Server', version='1.0.0', lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,7 +50,6 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-engine = TranslationEngine()
 
 
 class TranslateRequest(BaseModel):
@@ -148,12 +167,15 @@ async def translate(req: TranslateRequest):
         if not image_data_url:
             raise HTTPException(status_code=400, detail='Either imageDataUrl or sourceUrl is required')
 
-        translated_data_url, box_count = engine.process(
+        # --- FIX 3: Run the heavy AI processing in a separate threadpool ---
+        translated_data_url, box_count = await run_in_threadpool(
+            engine.process,
             image_data_url=image_data_url,
             target_lang=req.targetLang,
             inpaint_enabled=req.inpaintEnabled,
             max_width=req.maxWidth,
         )
+
         return TranslateResponse(ok=True, translatedDataUrl=translated_data_url, boxCount=box_count)
     except HTTPException:
         raise

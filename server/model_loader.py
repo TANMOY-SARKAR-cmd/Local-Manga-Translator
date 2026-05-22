@@ -32,11 +32,13 @@ class TranslationEngine:
     def _touch(self):
         self.last_used_at = time.time()
 
-    def _cleanup_if_expired(self):
+    def cleanup_if_expired(self):
         if not self.last_used_at:
             return
         if time.time() - self.last_used_at < MODEL_TTL_SECONDS:
             return
+
+        print("[LMT] TTL Expired: Unloading models to free VRAM.")
         self.ocr = None
         self.translator = None
         self.last_used_at = 0.0
@@ -45,9 +47,9 @@ class TranslationEngine:
             torch.cuda.empty_cache()
 
     def _load_models(self):
-        self._cleanup_if_expired()
         if self.ocr is None:
             self.ocr = MangaOcr()
+            print("[LMT] MangaOcr loaded.")
         if self.translator is None:
             device = 0 if torch.cuda.is_available() else -1
             self.translator = pipeline(
@@ -55,6 +57,7 @@ class TranslationEngine:
                 model='facebook/nllb-200-distilled-600M',
                 device=device
             )
+            print("[LMT] NLLB loaded.")
         self._touch()
 
     @staticmethod
