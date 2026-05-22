@@ -33,9 +33,19 @@ This repository now uses a **client-server architecture**:
 2. Install dependencies:
    - `pip install -r /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server/requirements.txt`
 3. Run the API:
-   - `uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server`
+   - `python /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server/main.py`
 
-Default extension server URL is `http://localhost:8000`.
+`server/main.py` now selects a free localhost port at startup and prints:
+
+- `Server starting on port: <port>`
+
+Default extension server URL is still `http://localhost:8000`, but if that URL is unavailable the extension will automatically probe:
+
+- `http://localhost:8000`
+- `http://localhost:8080`
+- `http://localhost:8081`
+- `http://localhost:8082`
+- `http://localhost:3000`
 
 ## API
 
@@ -65,12 +75,12 @@ Returns `{ "ok": true }`.
 ## Usage
 
 1. Start the server.
-2. Open the extension popup and verify **Server URL** is `http://localhost:8000` (or your server address).
+2. Open the extension popup and verify **Server URL** is `http://localhost:8000` (or your preferred server address).
 3. Set as needed:
    - Request timeout
    - Retry count
    - Translation options
-4. Click **Translate images on this page**.
+4. Click **Translate images on this page**. If the configured server URL is down, the extension will auto-discover the server on supported localhost ports.
 5. Use right-click image actions to translate or revert individual images.
 
 ## Validation

@@ -4,6 +4,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -161,3 +162,15 @@ async def translate(req: TranslateRequest):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f'Translation failed: {exc}') from exc
+
+
+def get_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+if __name__ == '__main__':
+    port = get_free_port()
+    print(f'Server starting on port: {port}')
+    uvicorn.run(app, host='127.0.0.1', port=port)

@@ -3,11 +3,14 @@
 (() => {
   const MIN_MANGA_IMAGE_AREA = 160000;
   const CANVAS_PLACEHOLDER_SRC = 'canvas-data';
+  const DISCOVERY_PORTS = [8000, 8080, 8081, 8082, 3000];
+  const DISCOVERY_TIMEOUT_MS = 500;
 
   const STATE = {
     overlays: new Map(),
     originals: new Map(),
-    activeRequests: new Set()
+    activeRequests: new Set(),
+    discoveredServerBase: null
   };
 
   function isLikelyMangaImage(img) {
@@ -100,13 +103,66 @@
     return raw.replace(/\/$/, '');
   }
 
+  function isValidServerBase(serverBase) {
+    try {
+      const url = new URL(serverBase);
+      return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname;
+    } catch {
+      return false;
+    }
+  }
+
+  async function isServerHealthy(serverBase, timeoutMs = DISCOVERY_TIMEOUT_MS) {
+    if (!isValidServerBase(serverBase)) return false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${serverBase}/health`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      return !!response?.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function discoverServer() {
+    if (STATE.discoveredServerBase && await isServerHealthy(STATE.discoveredServerBase)) {
+      return STATE.discoveredServerBase;
+    }
+
+    for (const port of DISCOVERY_PORTS) {
+      const base = `http://localhost:${port}`;
+      if (await isServerHealthy(base)) {
+        STATE.discoveredServerBase = base;
+        return base;
+      }
+    }
+    STATE.discoveredServerBase = null;
+    return null;
+  }
+
   async function postTranslateRequest(payload, settings, requestId) {
-    const serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
+    let serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
     const timeoutMs = Number(settings[MangaUtils.STORAGE_KEYS.SERVER_TIMEOUT_MS]) || 120000;
     const retries = Math.max(0, Number(settings[MangaUtils.STORAGE_KEYS.SERVER_RETRIES]) || 0);
     const attempts = retries + 1;
 
     let lastError = null;
+    const configuredHealthy = await isServerHealthy(serverBase);
+    if (!configuredHealthy) {
+      const discovered = await discoverServer();
+      if (discovered) {
+        serverBase = discovered;
+      } else {
+        throw new Error(`Could not find translation server on ports: ${DISCOVERY_PORTS.join(', ')}`);
+      }
+    } else {
+      STATE.discoveredServerBase = serverBase;
+    }
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const controller = new AbortController();
