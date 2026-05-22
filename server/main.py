@@ -116,9 +116,13 @@ async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> 
     parsed = _validate_source_url(source_url)
     headers = _page_headers(page_url)
     host = parsed.hostname or ''
-    base_url = f'{parsed.scheme}://{host}'
-    if parsed.port:
-        base_url = f'{base_url}:{parsed.port}'
+    if host == 'kumacdn.club' or host.endswith('.kumacdn.club'):
+        base_url = 'https://kumacdn.club'
+    elif host == 'rawkuma.net' or host.endswith('.rawkuma.net'):
+        base_url = 'https://rawkuma.net'
+    else:
+        raise HTTPException(status_code=400, detail='Source URL host is not supported')
+
     path_with_query = parsed.path or '/'
     if parsed.query:
         path_with_query = f'{path_with_query}?{parsed.query}'
