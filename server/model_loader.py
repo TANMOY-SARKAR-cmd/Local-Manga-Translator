@@ -1,6 +1,5 @@
 import gc
 import io
-import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -60,10 +59,15 @@ class TranslationEngine:
 
     @staticmethod
     def _decode_image(image_data_url: str) -> Image.Image:
-        match = re.match(r'^data:(.*?);base64,(.*)$', image_data_url)
-        if not match:
+        if not image_data_url.startswith('data:'):
             raise ValueError('Invalid imageDataUrl format')
-        b64_data = match.group(2)
+        marker = ';base64,'
+        marker_idx = image_data_url.find(marker)
+        if marker_idx <= 5:
+            raise ValueError('Invalid imageDataUrl format')
+        b64_data = image_data_url[marker_idx + len(marker):]
+        if not b64_data:
+            raise ValueError('Invalid imageDataUrl format')
         image_bytes = io.BytesIO()
         image_bytes.write(__import__('base64').b64decode(b64_data))
         image_bytes.seek(0)

@@ -1,3 +1,5 @@
+import ipaddress
+import socket
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -11,6 +13,7 @@ from model_loader import TranslationEngine
 RAWKUMA_REFERER = 'https://rawkuma.net/'
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
+BLOCKED_HOSTS = {'localhost', '127.0.0.1', '::1'}
 
 app = FastAPI(title='Local Manga Translator Server', version='1.0.0')
 
@@ -55,6 +58,33 @@ def _validate_source_url(source_url: str):
 
     if parsed.scheme not in {'http', 'https'}:
         raise HTTPException(status_code=400, detail='Unsupported source URL protocol')
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail='Credentials in source URL are not allowed')
+
+    host = (parsed.hostname or '').strip().lower()
+    if not host:
+        raise HTTPException(status_code=400, detail='Source URL host is required')
+    if host in BLOCKED_HOSTS:
+        raise HTTPException(status_code=400, detail='Source URL host is not allowed')
+
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            raise HTTPException(status_code=400, detail='Source URL host is not allowed')
+        return
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=400, detail=f'Source URL host resolution failed: {exc}') from exc
+
+    for info in infos:
+        resolved_ip = info[4][0]
+        ip = ipaddress.ip_address(resolved_ip)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            raise HTTPException(status_code=400, detail='Source URL resolves to a restricted address')
 
 
 def _page_headers(page_url: Optional[str]):
