@@ -271,6 +271,9 @@
     } catch (error) {
       console.error('[LMT] Translation failed:', error);
       updateOverlay(requestId, `Failed: ${error.message}`);
+
+      // --- FIX 1: Mark the element as failed so the observer ignores it ---
+      element.dataset.lmtFailed = '1';
     } finally {
       STATE.activeRequests.delete(requestId);
       setTimeout(() => removeOverlay(requestId), 1200);
@@ -378,7 +381,7 @@
         const settings = await getSettings();
 
         for (const img of dynamicallyAddedImages) {
-          if (!STATE.activeRequests.has(img.dataset.lmtOriginalSrc || img.src) && !img.dataset.lmtTranslated) {
+          if (!STATE.activeRequests.has(img.dataset.lmtOriginalSrc || img.src) && !img.dataset.lmtTranslated && !img.dataset.lmtFailed) {
             const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
             let overlay = STATE.overlays.get(requestId);
             if (!overlay) {

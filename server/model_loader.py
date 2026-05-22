@@ -1,6 +1,7 @@
 import gc
 import io
 import time
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -28,23 +29,25 @@ class TranslationEngine:
         self.ocr: Optional[MangaOcr] = None
         self.translator = None
         self.last_used_at = 0.0
+        self.lock = threading.Lock()
 
     def _touch(self):
         self.last_used_at = time.time()
 
     def cleanup_if_expired(self):
-        if not self.last_used_at:
-            return
-        if time.time() - self.last_used_at < MODEL_TTL_SECONDS:
-            return
+        with self.lock:
+            if not self.last_used_at:
+                return
+            if time.time() - self.last_used_at < MODEL_TTL_SECONDS:
+                return
 
-        print("[LMT] TTL Expired: Unloading models to free VRAM.")
-        self.ocr = None
-        self.translator = None
-        self.last_used_at = 0.0
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            print("[LMT] TTL Expired: Unloading models to free VRAM.")
+            self.ocr = None
+            self.translator = None
+            self.last_used_at = 0.0
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _load_models(self):
         if self.ocr is None:
@@ -234,60 +237,61 @@ class TranslationEngine:
         inpaint_enabled: bool,
         max_width: int,
     ):
-        self._load_models()
+        with self.lock:
+            self._load_models()
 
-        source_image = self._decode_image(image_data_url)
-        mime_type = 'image/jpeg' if image_data_url.startswith('data:image/jpeg') else 'image/png'
+            source_image = self._decode_image(image_data_url)
+            mime_type = 'image/jpeg' if image_data_url.startswith('data:image/jpeg') else 'image/png'
 
-        if source_image.width > max_width:
-            ratio = max_width / source_image.width
-            resized_h = max(1, int(source_image.height * ratio))
-            source_image = source_image.resize((max_width, resized_h), Image.LANCZOS)
+            if source_image.width > max_width:
+                ratio = max_width / source_image.width
+                resized_h = max(1, int(source_image.height * ratio))
+                source_image = source_image.resize((max_width, resized_h), Image.LANCZOS)
 
-        boxes = self._detect_text_regions(source_image)
-        translated_lines = []
+            boxes = self._detect_text_regions(source_image)
+            translated_lines = []
 
-        for region in boxes:
-            crop = source_image.crop((region.x, region.y, region.x + region.width, region.y + region.height)).convert('RGB')
+            for region in boxes:
+                crop = source_image.crop((region.x, region.y, region.x + region.width, region.y + region.height)).convert('RGB')
 
-            japanese_text = ''
-            try:
-                japanese_text = self.ocr(crop).strip() if self.ocr else ''
-            except Exception:
                 japanese_text = ''
-
-            if japanese_text:
                 try:
-                    out = self.translator(
-                        japanese_text,
-                        src_lang='jpn_Jpan',
-                        tgt_lang=target_lang
-                    )
-                    translated_lines.append(out[0].get('translation_text', '').strip())
+                    japanese_text = self.ocr(crop).strip() if self.ocr else ''
                 except Exception:
+                    japanese_text = ''
+
+                if japanese_text:
+                    try:
+                        out = self.translator(
+                            japanese_text,
+                            src_lang='jpn_Jpan',
+                            tgt_lang=target_lang
+                        )
+                        translated_lines.append(out[0].get('translation_text', '').strip())
+                    except Exception:
+                        translated_lines.append('')
+                else:
                     translated_lines.append('')
-            else:
-                translated_lines.append('')
 
-        draw = ImageDraw.Draw(source_image, 'RGBA')
+            draw = ImageDraw.Draw(source_image, 'RGBA')
 
-        for idx, region in enumerate(boxes):
-            if inpaint_enabled:
-                fill_rgb, _ = self._estimate_fill_color(source_image, region)
-                draw.rectangle(
-                    (region.x, region.y, region.x + region.width, region.y + region.height),
-                    fill=(*fill_rgb, 255)
-                )
-            else:
-                draw.rectangle(
-                    (region.x, region.y, region.x + region.width, region.y + region.height),
-                    fill=TEXT_BACKGROUND
-                )
+            for idx, region in enumerate(boxes):
+                if inpaint_enabled:
+                    fill_rgb, _ = self._estimate_fill_color(source_image, region)
+                    draw.rectangle(
+                        (region.x, region.y, region.x + region.width, region.y + region.height),
+                        fill=(*fill_rgb, 255)
+                    )
+                else:
+                    draw.rectangle(
+                        (region.x, region.y, region.x + region.width, region.y + region.height),
+                        fill=TEXT_BACKGROUND
+                    )
 
-            self._draw_wrapped_text(draw, region, translated_lines[idx] if idx < len(translated_lines) else '')
+                self._draw_wrapped_text(draw, region, translated_lines[idx] if idx < len(translated_lines) else '')
 
-        self._touch()
-        return self._encode_data_url(source_image, mime_type), len(boxes)
+            self._touch()
+            return self._encode_data_url(source_image, mime_type), len(boxes)
 
 
 def _iou(box1, box2):
