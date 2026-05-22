@@ -181,9 +181,13 @@
     return withDBStore(store, 'readonly', (s) => s.get(key));
   }
 
+  // --- FIX 2: Prevent concurrent database evictions ---
+  let _isEvicting = false;
+
   async function dbSet(store, key, value) {
-    if (store === TRANSLATION_STORE) {
+    if (store === TRANSLATION_STORE && !_isEvicting) {
       try {
+        _isEvicting = true; // Lock eviction
         const cacheInfo = await getCacheSize();
         if (cacheInfo.sizeMB >= MAX_CACHE_SIZE_MB || cacheInfo.count >= MAX_CACHE_ENTRIES) {
           cacheInfo.entries.sort((a, b) => a.updatedAt - b.updatedAt);
@@ -201,6 +205,8 @@
         }
       } catch (e) {
         console.warn('Failed to perform cache eviction', e);
+      } finally {
+        _isEvicting = false; // Unlock eviction
       }
     }
     return withDBStore(store, 'readwrite', (s) => s.put(value, key));
