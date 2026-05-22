@@ -1,6 +1,11 @@
 node_modules/
 .DS_Store
 npm-debug.log*
-vendor/*
-!vendor/transformers.js
-!vendor/ort-wasm-simd-threaded.jsep.wasm
+
+# Python/server artifacts
+__pycache__/
+*.py[cod]
+.venv/
+
+# Optional local model/download cache locations
+server/.cache/

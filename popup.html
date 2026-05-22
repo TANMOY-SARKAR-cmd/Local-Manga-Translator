@@ -16,6 +16,21 @@
       </label>
 
       <label class="column">
+        <span>Server URL</span>
+        <input type="url" id="serverUrl" placeholder="http://127.0.0.1:8000" />
+      </label>
+
+      <label class="column">
+        <span>Request timeout (ms)</span>
+        <input type="number" id="serverTimeoutMs" step="1000" />
+      </label>
+
+      <label class="column">
+        <span>Retry count</span>
+        <input type="number" id="serverRetries" step="1" />
+      </label>
+
+      <label class="column">
         <span>Target language</span>
         <select id="targetLang">
           <option value="eng_Latn">English</option>
@@ -47,7 +62,7 @@
 
       <div class="actions">
         <button id="translatePage" class="primary">Translate images on this page</button>
-        <button id="clearCache">Clear cached models</button>
+        <button id="clearCache">Clear local cache</button>
       </div>
 
       <p id="status" class="status"></p>

@@ -53,41 +53,6 @@
     STATE.overlays.delete(requestId);
   }
 
-  async function imageElementToDataURL(el, src) {
-    if (!src) throw new Error('Image source is empty.');
-
-    try {
-      const corsImg = new Image();
-      corsImg.crossOrigin = 'anonymous';
-      await new Promise((resolve, reject) => {
-        corsImg.onload = resolve;
-        corsImg.onerror = () => reject(new Error('Failed to reload image with CORS.'));
-        corsImg.src = src;
-      });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = corsImg.naturalWidth || el.naturalWidth || el.width;
-      canvas.height = corsImg.naturalHeight || el.naturalHeight || el.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Could not initialize canvas context.');
-      ctx.drawImage(corsImg, 0, 0);
-
-      let mimeType = 'image/jpeg';
-      if (src.toLowerCase().includes('.png')) mimeType = 'image/png';
-      else if (src.toLowerCase().includes('.webp')) mimeType = 'image/webp';
-      return canvas.toDataURL(mimeType, 0.9);
-    } catch (error) {
-      const response = await chrome.runtime.sendMessage({
-        type: 'FETCH_IMAGE_BACKGROUND',
-        url: src,
-        pageUrl: window.location.href
-      });
-      if (response?.dataUrl) return response.dataUrl;
-      const reason = response?.error || 'CORS restrictions or background fetch failure';
-      throw new Error(`CORS/Fetch blocked: ${src} (${reason})`);
-    }
-  }
-
   function getStandardImages() {
     return Array.from(document.querySelectorAll('img')).filter(isLikelyMangaImage).map(img => ({
       element: img,
@@ -128,6 +93,62 @@
     }));
   }
 
+  function normalizeServerUrl(baseUrl) {
+    const fallback = MangaUtils.DEFAULT_SETTINGS[MangaUtils.STORAGE_KEYS.SERVER_URL];
+    const raw = (baseUrl || fallback || '').trim();
+    if (!raw) return fallback;
+    return raw.replace(/\/$/, '');
+  }
+
+  async function postTranslateRequest(payload, settings, requestId) {
+    const serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
+    const timeoutMs = Number(settings[MangaUtils.STORAGE_KEYS.SERVER_TIMEOUT_MS]) || 120000;
+    const retries = Math.max(0, Number(settings[MangaUtils.STORAGE_KEYS.SERVER_RETRIES]) || 0);
+    const attempts = retries + 1;
+
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        updateOverlay(requestId, `Translating on server (${attempt}/${attempts})...`);
+        const response = await fetch(`${serverBase}/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        let data = null;
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+
+        if (!response.ok) {
+          throw new Error(data?.detail || data?.error || `Server error (${response.status})`);
+        }
+
+        if (!data?.ok || !data.translatedDataUrl) {
+          throw new Error(data?.error || 'Server returned invalid translation response');
+        }
+
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt >= attempts) break;
+        updateOverlay(requestId, `Retrying (${attempt}/${attempts - 1})...`);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    throw lastError || new Error('Translation request failed');
+  }
+
   async function sendProcessRequest(item, settings, existingRequestId = null) {
     const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -145,36 +166,28 @@
     }
 
     try {
-      let imageDataUrl;
+      let imageDataUrl = null;
       if (type === 'canvas') {
+        updateOverlay(requestId, 'Encoding canvas...');
         try {
           imageDataUrl = element.toDataURL('image/jpeg', 0.9);
         } catch (secErr) {
           throw new Error(`Canvas is tainted by cross-origin content and cannot be read: ${secErr.message}`);
         }
-      } else {
-        imageDataUrl = await imageElementToDataURL(element, originalSrc);
       }
-      updateOverlay(requestId, 'Detecting text...');
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'PROCESS_IMAGE',
-        payload: {
-          requestId,
-          sourceUrl: originalSrc,
-          imageDataUrl,
-          options: {
-            targetLang: settings[MangaUtils.STORAGE_KEYS.TARGET_LANG],
-            inpaintEnabled: settings[MangaUtils.STORAGE_KEYS.INPAINT],
-            maxWidth: settings[MangaUtils.STORAGE_KEYS.MAX_WIDTH],
-            modelUrls: settings[MangaUtils.STORAGE_KEYS.MODEL_URLS]
-          }
-        }
-      });
+      const payload = {
+        requestId,
+        sourceUrl: type === 'canvas' ? null : originalSrc,
+        imageDataUrl,
+        pageUrl: window.location.href,
+        targetLang: settings[MangaUtils.STORAGE_KEYS.TARGET_LANG],
+        inpaintEnabled: settings[MangaUtils.STORAGE_KEYS.INPAINT],
+        maxWidth: settings[MangaUtils.STORAGE_KEYS.MAX_WIDTH]
+      };
 
-      if (!response?.ok || !response.translatedDataUrl) {
-        throw new Error(response?.error || 'Failed to translate image');
-      }
+      updateOverlay(requestId, 'Sending to server...');
+      const response = await postTranslateRequest(payload, settings, requestId);
 
       if (type === 'img') {
         element.src = response.translatedDataUrl;
@@ -200,7 +213,7 @@
       updateOverlay(requestId, `Failed: ${error.message}`);
     } finally {
       STATE.activeRequests.delete(requestId);
-      setTimeout(() => removeOverlay(requestId), 800);
+      setTimeout(() => removeOverlay(requestId), 1200);
     }
   }
 
@@ -337,10 +350,6 @@
     });
   }
 
-  window.addEventListener('beforeunload', () => {
-    chrome.runtime.sendMessage({ type: 'ABORT_TAB_REQUESTS' }).catch(() => {});
-  });
-
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'START_PAGE_TRANSLATION') {
       translatePage().catch((error) => console.error('[LMT]', error));
@@ -352,10 +361,6 @@
 
     if (message?.type === 'REVERT_IMAGE_BY_SRC') {
       revertBySrc(message.srcUrl);
-    }
-
-    if (message?.type === 'IMAGE_PROGRESS' && message.requestId) {
-      updateOverlay(message.requestId, message.status || 'Working...');
     }
   });
 })();

@@ -1,77 +1,78 @@
-# Local Manga Translator (Chrome Extension, Manifest V3)
+# Local Manga Translator (Chrome Extension + FastAPI Server)
 
-This repository contains a fully local manga image translation extension for Chrome.
+This repository now uses a **client-server architecture**:
 
-## Highlights
+- **Client (Chrome extension):** image discovery, UI overlays, user settings, and request orchestration.
+- **Server (FastAPI):** OCR + translation + inpainting/rendering pipeline.
 
-- Manifest V3 architecture with:
-  - `background.js` service worker
-  - `offscreen.html` + `offscreen.mjs` for WebGPU/canvas processing
-  - `content.js` for per-image page integration
-  - `popup.html` + `popup.js` for controls
-- Local-first pipeline: detect text → OCR → translation → inpaint → overlay translated text.
-- No paid cloud APIs (all model inference runs client-side).
-- Lazy model loading and cache reuse.
-- iGPU/RAM-aware behavior:
-  - one image at a time
-  - max resolution control (default 1280 px)
-  - per-request VRAM flush after queue completion
-  - WebGPU preferred, wasm fallback
-
-## Folder structure
+## Repository structure
 
 - `/manifest.json`
 - `/background.js`
 - `/content.js`
-- `/offscreen.html`
-- `/offscreen.mjs`
 - `/popup.html`
 - `/popup.js`
 - `/styles.css`
 - `/utils.js`
+- `/server/main.py`
+- `/server/model_loader.py`
+- `/server/requirements.txt`
 
-## Load in Chrome
+## Extension setup
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
-4. Select this folder:
-   - `path/to/Local-Manga-Translator`
+4. Select:
+   - `/home/runner/work/Local-Manga-Translator/Local-Manga-Translator`
 
-## Model setup
+## Server setup
 
-Models are downloaded on first use and cached locally (browser cache + IndexedDB).
+1. Create and activate a Python virtual environment.
+2. Install dependencies:
+   - `pip install -r /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server/requirements.txt`
+3. Run the API:
+   - `uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /home/runner/work/Local-Manga-Translator/Local-Manga-Translator/server`
 
-Default model IDs in `utils.js`:
+Default extension server URL is `http://127.0.0.1:8000`.
 
-- Manga OCR:
-  - `Xenova/manga-ocr-base`
-- Translation (NLLB distilled):
-  - `Xenova/nllb-200-distilled-600M`
+## API
 
-## Runtime dependency
+### `POST /translate`
 
-This repository vendors Transformers.js assets under `vendor/`:
+Request body:
 
-- `vendor/transformers.js`
-- `vendor/ort-wasm-simd-threaded.jsep.wasm`
+- `sourceUrl` (optional): image URL for server-side fetching/proxying
+- `imageDataUrl` (optional): base64 data URL image payload
+- `pageUrl` (optional): page URL used for referer/origin forwarding
+- `targetLang` (required): NLLB target language code, e.g. `eng_Latn`
+- `inpaintEnabled` (required): boolean
+- `maxWidth` (required): integer
 
-The offscreen pipeline attempts WebGPU first and falls back to wasm with quantized (`q8`) model loading.
+At least one of `sourceUrl` or `imageDataUrl` must be provided.
+
+Response body:
+
+- `ok`
+- `translatedDataUrl`
+- `boxCount`
+
+### `GET /health`
+
+Returns `{ "ok": true }`.
 
 ## Usage
 
-- Click extension icon to open popup.
-- Set options:
-  - Enable/disable extension
-  - Target language (default English)
-  - Inpainting on/off
-  - Max image width
-- Click **Translate images on this page**.
-- Right-click an image:
-  - **Translate manga image**
-  - **Revert translated image**
-- Use **Clear cached models** to free disk space.
+1. Start the server.
+2. Open extension popup and set:
+   - Server URL
+   - Request timeout
+   - Retry count
+   - Translation options
+3. Click **Translate images on this page**.
+4. Use right-click image actions to translate or revert individual images.
 
-## Offline behavior
+## Validation
 
-After models are downloaded once, the extension reuses local caches. Translation can continue offline as long as required runtime and cached model files are present.
+- Extension validation: `npm test`
+- Server syntax check: `python -m py_compile server/main.py server/model_loader.py`
