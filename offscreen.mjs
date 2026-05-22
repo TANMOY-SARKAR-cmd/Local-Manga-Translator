@@ -2,7 +2,7 @@
 import { pipeline, env } from './vendor/transformers.js';
 
 (() => {
-  env.useBrowserCache = true;
+  env.useBrowserCache = false;
   env.allowLocalModels = false;
 
   const MODEL_STATE = {

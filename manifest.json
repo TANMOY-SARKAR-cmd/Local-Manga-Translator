@@ -7,7 +7,8 @@
     "storage",
     "offscreen",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "*://*.kumacdn.club/*",

@@ -73,6 +73,40 @@ chrome.runtime.onInstalled.addListener(async () => {
     title: 'Revert translated image',
     contexts: ['image']
   });
+
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: [1, 2],
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: {
+          type: 'modifyHeaders',
+          requestHeaders: [
+            { header: 'Referer', operation: 'set', value: RAWKUMA_REFERER }
+          ]
+        },
+        condition: {
+          urlFilter: '||kumacdn.club/*',
+          resourceTypes: ['image', 'xmlhttprequest']
+        }
+      },
+      {
+        id: 2,
+        priority: 1,
+        action: {
+          type: 'modifyHeaders',
+          responseHeaders: [
+            { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' }
+          ]
+        },
+        condition: {
+          urlFilter: '||kumacdn.club/*',
+          resourceTypes: ['image', 'xmlhttprequest']
+        }
+      }
+    ]
+  });
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
