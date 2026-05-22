@@ -161,7 +161,17 @@ async def translate(req: TranslateRequest):
         raise HTTPException(status_code=500, detail=f'Translation failed: {exc}') from exc
 
 
-def get_free_port() -> int:
+def get_free_port(preferred_ports=[8000, 8080, 8081, 8082, 3000]) -> int:
+    # First, try the ports the Chrome Extension is programmed to look for
+    for port in preferred_ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(('127.0.0.1', port))
+                return port # Return the first preferred port that is free
+            except OSError:
+                continue # Port is in use, try the next one
+
+    # Fallback: If all preferred ports are taken, let the OS pick one
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(('127.0.0.1', 0))
         return sock.getsockname()[1]
