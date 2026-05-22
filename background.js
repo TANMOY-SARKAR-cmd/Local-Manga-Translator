@@ -158,12 +158,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         try {
-          // Disguise the background script as the manga website itself
+          // Dynamically determine the origin and referer based on the active tab
+          const pageOrigin = message.pageUrl ? new URL(message.pageUrl).origin : 'https://rawkuma.net';
+          const dynamicReferer = message.pageUrl || RAWKUMA_REFERER;
+
+          // Disguise the background script as the active manga website
           const res = await fetch(parsedUrl.toString(), {
             method: 'GET',
             headers: {
-              Referer: RAWKUMA_REFERER,
-              Origin: 'https://rawkuma.net',
+              Referer: dynamicReferer,
+              Origin: pageOrigin,
               'User-Agent': self.navigator?.userAgent || FALLBACK_USER_AGENT,
               Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
             }

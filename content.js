@@ -79,7 +79,8 @@
     } catch (error) {
       const response = await chrome.runtime.sendMessage({
         type: 'FETCH_IMAGE_BACKGROUND',
-        url: src
+        url: src,
+        pageUrl: window.location.href
       });
       if (response?.dataUrl) return response.dataUrl;
       const reason = response?.error || 'CORS restrictions or background fetch failure';
