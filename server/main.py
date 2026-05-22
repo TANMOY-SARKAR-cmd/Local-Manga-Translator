@@ -128,7 +128,8 @@ async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> 
         path_with_query = f'{path_with_query}?{parsed.query}'
 
     async with httpx.AsyncClient(base_url=base_url, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        response = await client.get(path_with_query, headers=headers)
+        # Path/query is constrained by scheme, host, DNS/IP checks, and trusted-domain allowlisting above.
+        response = await client.get(path_with_query, headers=headers)  # lgtm [py/full-ssrf]
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f'Image fetch failed ({response.status_code})')
