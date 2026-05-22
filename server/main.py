@@ -174,6 +174,9 @@ def allocate_server_socket() -> tuple[socket.socket, int]:
 if __name__ == '__main__':
     server_socket, port = allocate_server_socket()
     print(f'Server starting on port: {port}')
-    config = uvicorn.Config(app, host='127.0.0.1')
-    server = uvicorn.Server(config)
-    server.run(sockets=[server_socket])
+    try:
+        config = uvicorn.Config(app, host='127.0.0.1', port=port)
+        server = uvicorn.Server(config)
+        server.run(sockets=[server_socket])
+    finally:
+        server_socket.close()

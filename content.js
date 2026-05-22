@@ -9,7 +9,8 @@
   const STATE = {
     overlays: new Map(),
     originals: new Map(),
-    activeRequests: new Set()
+    activeRequests: new Set(),
+    discoveredServerBase: null
   };
 
   function isLikelyMangaImage(img) {
@@ -129,12 +130,18 @@
   }
 
   async function discoverServer() {
+    if (STATE.discoveredServerBase && await isServerHealthy(STATE.discoveredServerBase)) {
+      return STATE.discoveredServerBase;
+    }
+
     for (const port of DISCOVERY_PORTS) {
       const base = `http://localhost:${port}`;
       if (await isServerHealthy(base)) {
+        STATE.discoveredServerBase = base;
         return base;
       }
     }
+    STATE.discoveredServerBase = null;
     return null;
   }
 
@@ -151,8 +158,10 @@
       if (discovered) {
         serverBase = discovered;
       } else {
-        throw new Error('Could not find translation server.');
+        throw new Error(`Could not find translation server on ports: ${DISCOVERY_PORTS.join(', ')}`);
       }
+    } else {
+      STATE.discoveredServerBase = serverBase;
     }
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
