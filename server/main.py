@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import socket
 from typing import Optional
 from urllib.parse import urlparse
@@ -8,14 +9,16 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 from model_loader import TranslationEngine
 
-RAWKUMA_REFERER = 'https://rawkuma.net/'
+load_dotenv()
+
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
 BLOCKED_HOSTS = {'localhost', '127.0.0.1', '::1'}
-ALLOWED_SOURCE_DOMAINS = ('kumacdn.club', 'rawkuma.net')
+ALLOWED_SOURCE_DOMAINS = [d.strip() for d in os.getenv("ALLOWED_DOMAINS", "kumacdn.club,rawkuma.net").split(",")]
 
 app = FastAPI(title='Local Manga Translator Server', version='1.0.0')
 
@@ -95,8 +98,8 @@ def _validate_source_url(source_url: str):
 
 
 def _page_headers(page_url: Optional[str]):
-    referer = page_url or RAWKUMA_REFERER
-    origin = RAWKUMA_REFERER.rstrip('/')
+    referer = page_url or ""
+    origin = ""
     if page_url:
         try:
             parsed = urlparse(page_url)
@@ -107,7 +110,7 @@ def _page_headers(page_url: Optional[str]):
 
     return {
         'Referer': referer,
-        'Origin': origin,
+        **(({'Origin': origin} if origin else {})),
         'User-Agent': FALLBACK_USER_AGENT,
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
     }
@@ -116,15 +119,9 @@ def _page_headers(page_url: Optional[str]):
 async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> str:
     parsed = _validate_source_url(source_url)
     headers = _page_headers(page_url)
-    host = parsed.hostname or ''
-    if host == 'kumacdn.club' or host.endswith('.kumacdn.club'):
-        base_url = 'https://kumacdn.club'
-    elif host == 'rawkuma.net' or host.endswith('.rawkuma.net'):
-        base_url = 'https://rawkuma.net'
-    else:
-        raise HTTPException(status_code=400, detail='Source URL host is not supported')
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    path_with_query = parsed.path or '/'
+    path_with_query = parsed.path
     if parsed.query:
         path_with_query = f'{path_with_query}?{parsed.query}'
 
