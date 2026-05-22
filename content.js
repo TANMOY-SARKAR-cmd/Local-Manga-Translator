@@ -209,7 +209,7 @@
     const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    // --- ADDED: 1. Generate a unique cache key based on the image and language ---
+    // --- 1. Generate the Cache Key ---
     const cacheKey = await MangaUtils.hashString(originalSrc + settings[MangaUtils.STORAGE_KEYS.TARGET_LANG]);
 
     let overlay = STATE.overlays.get(requestId);
@@ -226,12 +226,12 @@
     }
 
     try {
-      // --- ADDED: 2. Check the local IndexedDB Cache before hitting the server ---
+      // --- 2. Check Cache before hitting the server ---
       const cachedResult = await MangaUtils.dbGet(MangaUtils.TRANSLATION_STORE, cacheKey);
       if (cachedResult && cachedResult.translatedDataUrl) {
         updateOverlay(requestId, 'Loaded from cache');
         applyTranslatedImage(element, type, cachedResult.translatedDataUrl);
-        return; // Exit early, skipping the server!
+        return; // EXIT EARLY! Do not hit the server.
       }
 
       let imageDataUrl = null;
@@ -257,7 +257,7 @@
       updateOverlay(requestId, 'Sending to server...');
       const response = await postTranslateRequest(payload, settings, requestId);
 
-      // --- ADDED: 3. Save the successful server response to the local Cache ---
+      // --- 3. Save the server's response to the Cache ---
       if (response && response.translatedDataUrl) {
         await MangaUtils.dbSet(MangaUtils.TRANSLATION_STORE, cacheKey, {
            translatedDataUrl: response.translatedDataUrl,
@@ -265,7 +265,7 @@
         });
         applyTranslatedImage(element, type, response.translatedDataUrl);
       }
-
+      updateOverlay(requestId, 'Done');
     } catch (error) {
       console.error('[LMT] Translation failed:', error);
       updateOverlay(requestId, `Failed: ${error.message}`);
@@ -275,7 +275,7 @@
     }
   }
 
-  // --- ADDED: Helper function to keep the code clean ---
+  // --- Helper needed for the cache logic above ---
   function applyTranslatedImage(element, type, dataUrl) {
       if (type === 'img') {
         element.src = dataUrl;
