@@ -1,23 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Local Manga Translator",
-  "description": "Translate manga images fully on-device with WebGPU-accelerated ONNX runtime.",
+  "description": "Translate manga images with a client-server architecture using a local/remote AI backend.",
   "version": "1.0.0",
   "permissions": [
     "storage",
-    "offscreen",
     "activeTab",
-    "contextMenus",
-    "declarativeNetRequest"
-  ],
-  "host_permissions": [
-    "*://*.kumacdn.club/*",
-    "*://*.rawkuma.net/*",
-    "https://huggingface.co/*",
-    "https://cdn-lfs.huggingface.co/*",
-    "https://*.huggingface.co/*",
-    "https://*.hf.co/*",
-    "https://cdn.jsdelivr.net/*"
+    "contextMenus"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,9 +14,6 @@
   "action": {
     "default_title": "Local Manga Translator",
     "default_popup": "popup.html"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co https://*.huggingface.co https://*.hf.co https://cdn.jsdelivr.net;"
   },
   "content_scripts": [
     {
@@ -42,17 +28,6 @@
         "styles.css"
       ],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "offscreen.html",
-        "styles.css"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
     }
   ]
 }

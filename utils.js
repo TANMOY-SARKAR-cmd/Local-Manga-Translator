@@ -4,7 +4,9 @@
     TARGET_LANG: 'targetLang',
     INPAINT: 'inpaintEnabled',
     MAX_WIDTH: 'maxImageWidth',
-    MODEL_URLS: 'modelUrls'
+    SERVER_URL: 'serverUrl',
+    SERVER_TIMEOUT_MS: 'serverTimeoutMs',
+    SERVER_RETRIES: 'serverRetries'
   };
 
   const MAX_CACHE_SIZE_MB = 200;
@@ -15,15 +17,23 @@
     MIN_WIDTH: 640,
     MAX_WIDTH: 2048
   };
+  const NETWORK_LIMITS = {
+    DEFAULT_TIMEOUT_MS: 120000,
+    MIN_TIMEOUT_MS: 10000,
+    MAX_TIMEOUT_MS: 600000,
+    DEFAULT_RETRIES: 1,
+    MIN_RETRIES: 0,
+    MAX_RETRIES: 5
+  };
+
   const DEFAULT_SETTINGS = {
     [STORAGE_KEYS.ENABLED]: true,
     [STORAGE_KEYS.TARGET_LANG]: 'eng_Latn',
     [STORAGE_KEYS.INPAINT]: true,
     [STORAGE_KEYS.MAX_WIDTH]: IMAGE_SIZE_LIMITS.DEFAULT_MAX_WIDTH,
-    [STORAGE_KEYS.MODEL_URLS]: {
-      ocr: 'onnx-community/manga-ocr-base-ONNX',
-      translator: 'Xenova/nllb-200-distilled-600M'
-    }
+    [STORAGE_KEYS.SERVER_URL]: 'http://127.0.0.1:8000',
+    [STORAGE_KEYS.SERVER_TIMEOUT_MS]: NETWORK_LIMITS.DEFAULT_TIMEOUT_MS,
+    [STORAGE_KEYS.SERVER_RETRIES]: NETWORK_LIMITS.DEFAULT_RETRIES
   };
 
   const DB_NAME = 'lmt-cache-db';
@@ -49,8 +59,6 @@
 
   function dataURLToBlob(dataURL) {
     const [meta, b64] = dataURL.split(',');
-
-    // Change the fallback from 'image/png' to 'image/jpeg'
     const mime = (meta.match(/data:(.*);base64/) || [])[1] || 'image/jpeg';
 
     const bytes = atob(b64);
@@ -62,7 +70,6 @@
   }
 
   async function blobToDataURL(blob) {
-    // Standard DOM approach (works in content scripts, offscreen, popup)
     if (typeof FileReader !== 'undefined') {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -70,22 +77,19 @@
         reader.onload = () => resolve(reader.result);
         reader.readAsDataURL(blob);
       });
-    } 
-    // Fallback for Service Workers (background.js)
-    else {
-      const buffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      const chunkSize = 8192; // Chunking prevents call stack overflow on large images
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-      }
-      return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
     }
+
+    const buffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
   }
 
   function hashString(text) {
-    // FNV-1a style hash to generate short deterministic cache keys for image+settings tuples.
     let hash = 2166136261;
     for (let i = 0; i < text.length; i += 1) {
       hash ^= text.charCodeAt(i);
@@ -95,7 +99,9 @@
   }
 
   async function clearModelCache() {
-    await caches.delete('transformers-cache');
+    if (typeof caches === 'undefined') return;
+    const cacheKeys = await caches.keys();
+    await Promise.all(cacheKeys.map((key) => caches.delete(key)));
   }
 
   let _dbPromise = null;
@@ -214,6 +220,7 @@
       DEFAULT_SETTINGS,
       TRANSLATION_STORE,
       IMAGE_SIZE_LIMITS,
+      NETWORK_LIMITS,
       getSettings,
       setSettings,
       dataURLToBlob,
