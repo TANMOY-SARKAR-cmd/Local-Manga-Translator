@@ -10,7 +10,10 @@
     overlays: new Map(),
     originals: new Map(),
     activeRequests: new Set(),
-    discoveredServerBase: null
+    discoveredServerBase: null,
+    discoveryPromise: null,
+    lastHealthyServer: null,
+    healthCheckTime: 0
   };
 
   function isLikelyMangaImage(img) {
@@ -145,24 +148,50 @@
     return null;
   }
 
+  // --- FIX 1: Prevent Thundering Herd Health Checks ---
+  async function getActiveServerBase(settings) {
+    const now = Date.now();
+
+    // If we successfully found the server in the last 15 seconds, reuse it instantly
+    if (STATE.lastHealthyServer && (now - STATE.healthCheckTime < 15000)) {
+      return STATE.lastHealthyServer;
+    }
+
+    // If another image is currently discovering the server, wait for it to finish
+    if (STATE.discoveryPromise) {
+      return STATE.discoveryPromise;
+    }
+
+    // Lock the discovery process
+    STATE.discoveryPromise = (async () => {
+      let serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
+      let configuredHealthy = await isServerHealthy(serverBase);
+
+      if (!configuredHealthy) {
+        serverBase = await discoverServer();
+        if (!serverBase) throw new Error(`Could not find translation server on ports: ${DISCOVERY_PORTS.join(", ")}`);
+      }
+
+      STATE.lastHealthyServer = serverBase;
+      STATE.healthCheckTime = Date.now();
+      return serverBase;
+    })();
+
+    try {
+      return await STATE.discoveryPromise;
+    } finally {
+      STATE.discoveryPromise = null; // Release the lock
+    }
+  }
+
   async function postTranslateRequest(payload, settings, requestId) {
-    let serverBase = normalizeServerUrl(settings[MangaUtils.STORAGE_KEYS.SERVER_URL]);
+    // --- FIX 1 (Part 2): Use the synchronized server base ---
+    const serverBase = await getActiveServerBase(settings);
+
     const timeoutMs = Number(settings[MangaUtils.STORAGE_KEYS.SERVER_TIMEOUT_MS]) || 120000;
     const retries = Math.max(0, Number(settings[MangaUtils.STORAGE_KEYS.SERVER_RETRIES]) || 0);
     const attempts = retries + 1;
-
     let lastError = null;
-    const configuredHealthy = await isServerHealthy(serverBase);
-    if (!configuredHealthy) {
-      const discovered = await discoverServer();
-      if (discovered) {
-        serverBase = discovered;
-      } else {
-        throw new Error(`Could not find translation server on ports: ${DISCOVERY_PORTS.join(', ')}`);
-      }
-    } else {
-      STATE.discoveredServerBase = serverBase;
-    }
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const controller = new AbortController();
