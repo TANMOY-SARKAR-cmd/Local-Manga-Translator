@@ -243,12 +243,14 @@
 
     STATE.activeRequests.add(requestId);
 
-    if (type !== 'canvas' && !STATE.originals.has(originalSrc)) {
-      STATE.originals.set(originalSrc, originalSrc);
-      element.dataset.lmtOriginalSrc = originalSrc;
-    } else if (type === 'canvas' && !element.dataset.lmtOriginalData) {
-      element.dataset.lmtOriginalData = imageDataUrl;
-      element.dataset.lmtOriginalSrc = CANVAS_PLACEHOLDER_SRC;
+    if (!STATE.originals.has(uniqueIdentifier)) {
+      STATE.originals.set(uniqueIdentifier, uniqueIdentifier);
+      if (type === 'canvas') {
+        element.dataset.lmtOriginalData = imageDataUrl;
+        element.dataset.lmtOriginalSrc = CANVAS_PLACEHOLDER_SRC;
+      } else {
+        element.dataset.lmtOriginalSrc = originalSrc;
+      }
     }
 
     try {
