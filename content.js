@@ -117,18 +117,15 @@
 
   async function isServerHealthy(serverBase, timeoutMs = DISCOVERY_TIMEOUT_MS) {
     if (!isValidServerBase(serverBase)) return false;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${serverBase}/health`, {
-        method: 'GET',
-        signal: controller.signal
+      const response = await chrome.runtime.sendMessage({
+        type: 'FETCH_HEALTH',
+        serverBase,
+        timeoutMs
       });
       return !!response?.ok;
     } catch {
       return false;
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
@@ -194,40 +191,24 @@
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
       try {
         updateOverlay(requestId, `Translating on server (${attempt}/${attempts})...`);
-        const response = await fetch(`${serverBase}/translate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal
+        const response = await chrome.runtime.sendMessage({
+          type: 'FETCH_TRANSLATE',
+          serverBase,
+          payload,
+          timeoutMs
         });
 
-        let data = null;
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
+        if (!response?.ok) {
+          throw new Error(response?.error || 'Translation request failed');
         }
 
-        if (!response.ok) {
-          throw new Error(data?.detail || data?.error || `Server error (${response.status})`);
-        }
-
-        if (!data?.ok || !data.translatedDataUrl) {
-          throw new Error(data?.error || 'Server returned invalid translation response');
-        }
-
-        return data;
+        return response.data;
       } catch (error) {
         lastError = error;
         if (attempt >= attempts) break;
         updateOverlay(requestId, `Retrying (${attempt}/${attempts - 1})...`);
-      } finally {
-        clearTimeout(timeoutId);
       }
     }
 
@@ -262,9 +243,14 @@
 
     STATE.activeRequests.add(requestId);
 
-    if (type !== 'canvas' && !STATE.originals.has(originalSrc)) {
-      STATE.originals.set(originalSrc, originalSrc);
-      element.dataset.lmtOriginalSrc = originalSrc;
+    if (!STATE.originals.has(uniqueIdentifier)) {
+      STATE.originals.set(uniqueIdentifier, uniqueIdentifier);
+      if (type === 'canvas') {
+        element.dataset.lmtOriginalData = imageDataUrl;
+        element.dataset.lmtOriginalSrc = CANVAS_PLACEHOLDER_SRC;
+      } else {
+        element.dataset.lmtOriginalSrc = originalSrc;
+      }
     }
 
     try {
@@ -366,30 +352,81 @@
     }
   }
 
-  function findImageBySrc(srcUrl, includeOriginal = false) {
-    return Array.from(document.querySelectorAll('img')).find((node) => {
+  function findElementBySrc(srcUrl, includeOriginal = false) {
+    // 1. Check standard images
+    const img = Array.from(document.querySelectorAll('img')).find((node) => {
       const current = node.currentSrc || node.src;
       return current === srcUrl || (includeOriginal && node.dataset.lmtOriginalSrc === srcUrl);
     });
+    if (img) return { element: img, type: 'img' };
+
+    // 2. Check CSS backgrounds
+    const bgEl = Array.from(document.querySelectorAll('div, span, a')).find((node) => {
+      if (includeOriginal && node.dataset.lmtOriginalSrc === srcUrl) return true;
+      const style = window.getComputedStyle(node);
+      const bg = style.backgroundImage;
+      if (bg && bg !== 'none' && bg.startsWith('url(')) {
+        const url = bg.slice(4, -1).replace(/["']/g, '');
+        return url === srcUrl;
+      }
+      return false;
+    });
+    if (bgEl) return { element: bgEl, type: 'bg' };
+
+    // 3. Check canvases
+    const canvas = Array.from(document.querySelectorAll('canvas')).find((node) => {
+      if (includeOriginal && node.dataset.lmtOriginalSrc === srcUrl) return true;
+      // We can't easily match current canvas pixels to srcUrl (which is CANVAS_PLACEHOLDER_SRC or data url)
+      // So relying on lmtOriginalSrc or dataset matching is crucial if we needed to find them this way.
+      // However, usually context menu clicks on canvas are tricky. If it matches, we return it.
+      // Usually, revert/translate on canvas from context menu uses a data URL.
+      if (includeOriginal && node.dataset.lmtOriginalData === srcUrl) return true;
+      return false;
+    });
+    if (canvas) return { element: canvas, type: 'canvas' };
+
+    return null;
   }
 
   async function translateBySrc(srcUrl) {
     if (!srcUrl) return;
-    const img = findImageBySrc(srcUrl);
+    const found = findElementBySrc(srcUrl);
 
-    if (!img) return;
+    if (!found) return;
     const settings = await getSettings();
-    const item = { element: img, type: 'img', originalSrc: img.currentSrc || img.src };
+    let originalSrc = srcUrl;
+    if (found.type === 'img') {
+       originalSrc = found.element.currentSrc || found.element.src;
+    } else if (found.type === 'canvas') {
+       originalSrc = CANVAS_PLACEHOLDER_SRC;
+    }
+    const item = { element: found.element, type: found.type, originalSrc };
     await sendProcessRequest(item, settings);
   }
 
   function revertBySrc(srcUrl) {
     if (!srcUrl) return;
-    const img = findImageBySrc(srcUrl, true);
+    const found = findElementBySrc(srcUrl, true);
 
-    if (!img || !img.dataset.lmtOriginalSrc) return;
-    img.src = img.dataset.lmtOriginalSrc;
-    img.dataset.lmtTranslated = '0';
+    if (!found || !found.element.dataset.lmtOriginalSrc) return;
+    const { element, type } = found;
+
+    if (type === 'img') {
+      element.src = element.dataset.lmtOriginalSrc;
+    } else if (type === 'bg') {
+      element.style.backgroundImage = `url('${element.dataset.lmtOriginalSrc}')`;
+    } else if (type === 'canvas') {
+      if (element.dataset.lmtOriginalData) {
+        const originalImg = new Image();
+        originalImg.onload = () => {
+          const ctx = element.getContext('2d');
+          if (ctx) ctx.drawImage(originalImg, 0, 0, element.width, element.height);
+        };
+        originalImg.src = element.dataset.lmtOriginalData;
+      }
+    }
+
+    element.dataset.lmtTranslated = '0';
   }
 
 

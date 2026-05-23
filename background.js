@@ -71,6 +71,58 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
+      if (message?.type === 'FETCH_HEALTH') {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), message.timeoutMs || 500);
+          const response = await fetch(`${message.serverBase}/health`, {
+            method: 'GET',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          sendResponse({ ok: response.ok });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+        return;
+      }
+
+      if (message?.type === 'FETCH_TRANSLATE') {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), message.timeoutMs || 120000);
+          const response = await fetch(`${message.serverBase}/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(message.payload),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          let data = null;
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+
+          if (!response.ok) {
+            sendResponse({ ok: false, error: data?.detail || data?.error || `Server error (${response.status})` });
+            return;
+          }
+
+          if (!data?.ok || !data.translatedDataUrl) {
+            sendResponse({ ok: false, error: data?.error || 'Server returned invalid translation response' });
+            return;
+          }
+
+          sendResponse({ ok: true, data });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+        return;
+      }
+
       sendResponse({ ok: false, error: 'Unknown message type' });
     } catch (error) {
       sendResponse({ ok: false, error: error?.message || String(error) });
