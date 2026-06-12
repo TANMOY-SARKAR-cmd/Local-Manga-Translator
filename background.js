@@ -17,7 +17,7 @@ async function sendToTab(tabId, payload) {
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureDefaults();
 
-  // Remove first — prevents "ID already exists" errors on extension update
+  // Remove first to prevent "ID already exists" errors on extension update
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'translate-image',

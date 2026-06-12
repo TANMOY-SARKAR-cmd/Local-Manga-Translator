@@ -1,10 +1,10 @@
 import asyncio
 import base64
-import logging
-from contextlib import asynccontextmanager
 import ipaddress
+import logging
 import os
 import socket
+from contextlib import asynccontextmanager
 from typing import Optional
 from urllib.parse import urlparse, ParseResult
 
@@ -18,24 +18,22 @@ from dotenv import load_dotenv
 
 from model_loader import TranslationEngine
 
-load_dotenv() # Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-MAX_DATA_URL_CHARS = 28_000_000   # ~20 MB raw image limit
 
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
 BLOCKED_HOSTS = {'localhost', '127.0.0.1', '::1'}
 ALLOWED_SOURCE_DOMAINS = [d.strip() for d in os.getenv("ALLOWED_DOMAINS", "kumacdn.club,rawkuma.net").split(",")]
+MAX_DATA_URL_CHARS = 28_000_000
 
 engine = TranslationEngine()
 
-# --- FIX 2: Create a Background Janitor Task ---
 async def memory_janitor():
     while True:
-        await asyncio.sleep(30) # Check every 30 seconds
+        await asyncio.sleep(30)
         try:
             engine.cleanup_if_expired()
         except Exception:
@@ -43,13 +41,10 @@ async def memory_janitor():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the janitor when the server starts
     janitor = asyncio.create_task(memory_janitor())
     yield
-    # Stop the janitor when the server shuts down
     janitor.cancel()
 
-# Pass the lifespan to the FastAPI app
 app = FastAPI(title='Local Manga Translator Server', version='1.0.0', lifespan=lifespan)
 
 app.add_middleware(
@@ -59,8 +54,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
-
-
 
 class TranslateRequest(BaseModel):
     requestId: Optional[str] = None
@@ -75,11 +68,8 @@ class TranslateRequest(BaseModel):
     @classmethod
     def _check_payload_size(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and len(v) > MAX_DATA_URL_CHARS:
-            raise ValueError(
-                f'imageDataUrl exceeds {MAX_DATA_URL_CHARS // 1_000_000} MB limit'
-            )
+            raise ValueError(f'imageDataUrl exceeds {MAX_DATA_URL_CHARS // 1_000_000} MB limit')
         return v
-
 
 class TranslateResponse(BaseModel):
     ok: bool
@@ -87,11 +77,9 @@ class TranslateResponse(BaseModel):
     boxCount: int = 0
     error: Optional[str] = None
 
-
 @app.get('/health')
 async def health():
     return {'ok': True}
-
 
 def _validate_source_url(source_url: str) -> ParseResult:
     try:
@@ -112,12 +100,7 @@ def _validate_source_url(source_url: str) -> ParseResult:
 
     try:
         ip = ipaddress.ip_address(host)
-        # Block ALL direct IP addresses (public and private).
-        # Legitimate manga CDNs use hostnames subject to the allowlist.
-        raise HTTPException(
-            status_code=400,
-            detail='Direct IP-address URLs are not supported',
-        )
+        raise HTTPException(status_code=400, detail='Direct IP-address URLs are not supported')
     except ValueError:
         pass
 
@@ -137,7 +120,6 @@ def _validate_source_url(source_url: str) -> ParseResult:
 
     return parsed
 
-
 def _page_headers(page_url: Optional[str]):
     referer = page_url or ""
     origin = ""
@@ -156,7 +138,6 @@ def _page_headers(page_url: Optional[str]):
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
     }
 
-
 async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> str:
     parsed = _validate_source_url(source_url)
     headers = _page_headers(page_url)
@@ -167,8 +148,7 @@ async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> 
         path_with_query = f'{path_with_query}?{parsed.query}'
 
     async with httpx.AsyncClient(base_url=base_url, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        # Path/query is constrained by scheme, host, DNS/IP checks, and trusted-domain allowlisting above.
-        response = await client.get(path_with_query, headers=headers)  # lgtm [py/full-ssrf]
+        response = await client.get(path_with_query, headers=headers)
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f'Image fetch failed ({response.status_code})')
@@ -176,7 +156,6 @@ async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> 
     mime_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip() or 'image/jpeg'
     b64 = base64.b64encode(response.content).decode('utf-8')
     return f'data:{mime_type};base64,{b64}'
-
 
 @app.post('/translate', response_model=TranslateResponse)
 async def translate(req: TranslateRequest):
@@ -189,7 +168,6 @@ async def translate(req: TranslateRequest):
         if not image_data_url:
             raise HTTPException(status_code=400, detail='Either imageDataUrl or sourceUrl is required')
 
-        # --- FIX 3: Run the heavy AI processing in a separate threadpool ---
         translated_data_url, box_count = await run_in_threadpool(
             engine.process,
             image_data_url=image_data_url,
@@ -204,7 +182,6 @@ async def translate(req: TranslateRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f'Translation failed: {exc}') from exc
 
-
 def get_free_port(preferred_ports=[8000, 8080, 8081, 8082, 3000]) -> int:
     for port in preferred_ports:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -214,11 +191,9 @@ def get_free_port(preferred_ports=[8000, 8080, 8081, 8082, 3000]) -> int:
             except OSError:
                 continue
 
-    # Fallback
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(('127.0.0.1', 0))
         return sock.getsockname()[1]
-
 
 if __name__ == '__main__':
     port = get_free_port()

@@ -1,16 +1,11 @@
-# Core server
 fastapi>=0.115.0,<2.0
 uvicorn>=0.30.0,<2.0
 python-dotenv>=1.0.0
 httpx>=0.25.0,<1.0
 pydantic>=2.0.0,<3.0
-
-# Image processing
 pillow>=10.0.0
 numpy>=1.24.0,<3.0
-opencv-python-headless>=4.8.0   # enables cv2.inpaint for better background removal
-
-# AI / ML
+opencv-python-headless>=4.8.0
 torch>=2.0.0
 transformers>=4.35.0
-manga-ocr>=0.1.10               # VisionEncoderDecoder OCR for manga
+manga-ocr>=0.1.10
