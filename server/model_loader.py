@@ -1,9 +1,17 @@
+"""
+model_loader.py — TranslationEngine: OCR + Translation + Rendering
+"""
+from __future__ import annotations
+
+import base64
 import gc
 import io
+import logging
+import os
 import time
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -11,11 +19,58 @@ from manga_ocr import MangaOcr
 from PIL import Image, ImageDraw, ImageFont
 from transformers import pipeline
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 MODEL_TTL_SECONDS = 120
 TEXT_COLOR = (18, 18, 18)
 TEXT_BACKGROUND = (255, 255, 255, 140)
+MAX_IMAGE_PIXELS = 4096 * 4096   # ~16 MP hard limit
+MIN_OCR_CROP_PX  = 24            # minimum side length for a meaningful OCR crop
+
+# ---------------------------------------------------------------------------
+# Font helpers  (FIX #1: TrueType fonts, not bitmap default)
+# ---------------------------------------------------------------------------
+_FONT_SEARCH_PATHS: List[str] = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/Library/Fonts/Arial.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/calibri.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+]
 
 
+def _find_system_font() -> Optional[str]:
+    for path in _FONT_SEARCH_PATHS:
+        if os.path.isfile(path):
+            logger.debug("[LMT] Using system font: %s", path)
+            return path
+    logger.warning("[LMT] No TrueType font found; text will use PIL bitmap fallback.")
+    return None
+
+
+_SYSTEM_FONT_PATH: Optional[str] = _find_system_font()
+
+
+def _get_font(size: int) -> ImageFont.ImageFont:
+    """Load the system TTF at *size* pt; fall back to PIL bitmap default."""
+    if _SYSTEM_FONT_PATH:
+        try:
+            return ImageFont.truetype(_SYSTEM_FONT_PATH, max(6, size))
+        except (IOError, OSError):
+            pass
+    return ImageFont.load_default()
+
+
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
 @dataclass
 class TextRegion:
     x: int
@@ -24,24 +79,29 @@ class TextRegion:
     height: int
 
 
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
 class TranslationEngine:
-    def __init__(self):
+    def __init__(self) -> None:
         self.ocr: Optional[MangaOcr] = None
         self.translator = None
-        self.last_used_at = 0.0
+        self.last_used_at: float = 0.0
         self.lock = threading.Lock()
 
-    def _touch(self):
-        self.last_used_at = time.time()
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    def _touch(self) -> None:
+        self.last_used_at = time.monotonic()   # FIX: monotonic clock
 
-    def cleanup_if_expired(self):
+    def cleanup_if_expired(self) -> None:
         with self.lock:
             if not self.last_used_at:
                 return
-            if time.time() - self.last_used_at < MODEL_TTL_SECONDS:
+            if time.monotonic() - self.last_used_at < MODEL_TTL_SECONDS:
                 return
-
-            print("[LMT] TTL Expired: Unloading models to free VRAM.")
+            logger.info("[LMT] TTL expired — unloading models.")
             self.ocr = None
             self.translator = None
             self.last_used_at = 0.0
@@ -49,262 +109,299 @@ class TranslationEngine:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def _load_models(self):
+    def _load_models(self) -> None:
+        """Must be called with self.lock held."""
         if self.ocr is None:
             self.ocr = MangaOcr()
-            print("[LMT] MangaOcr loaded.")
+            logger.info("[LMT] MangaOcr loaded.")
         if self.translator is None:
             device = 0 if torch.cuda.is_available() else -1
             self.translator = pipeline(
-                'translation',
-                model='facebook/nllb-200-distilled-600M',
-                device=device
+                "translation",
+                model="facebook/nllb-200-distilled-600M",
+                device=device,
             )
-            print("[LMT] NLLB loaded.")
+            logger.info("[LMT] NLLB translator loaded.")
         self._touch()
 
+    # ------------------------------------------------------------------
+    # Image I/O  (FIX #2: top-level base64 import; size guard)
+    # ------------------------------------------------------------------
     @staticmethod
     def _decode_image(image_data_url: str) -> Image.Image:
-        if not image_data_url.startswith('data:'):
-            raise ValueError('Invalid imageDataUrl format')
-        marker = ';base64,'
-        marker_idx = image_data_url.find(marker)
-        if marker_idx <= 5:
-            raise ValueError('Invalid imageDataUrl format')
-        b64_data = image_data_url[marker_idx + len(marker):]
-        if not b64_data:
-            raise ValueError('Invalid imageDataUrl format')
-        image_bytes = io.BytesIO()
-        image_bytes.write(__import__('base64').b64decode(b64_data))
-        image_bytes.seek(0)
-        return Image.open(image_bytes).convert('RGBA')
+        if not image_data_url.startswith("data:"):
+            raise ValueError('imageDataUrl must start with "data:"')
+        marker = ";base64,"
+        idx = image_data_url.find(marker)
+        if idx <= 5:
+            raise ValueError("imageDataUrl missing ;base64, marker")
+
+        raw_bytes = base64.b64decode(image_data_url[idx + len(marker):])
+
+        # Verify integrity, then check dimensions before full decode
+        buf = io.BytesIO(raw_bytes)
+        probe = Image.open(buf)
+        probe.verify()        # raises on corrupt file (closes file object)
+        buf.seek(0)
+        img = Image.open(buf) # re-open after verify
+
+        if img.width * img.height > MAX_IMAGE_PIXELS:
+            raise ValueError(
+                f"Image too large ({img.width}×{img.height} px); "
+                f"limit is {MAX_IMAGE_PIXELS:,} px"
+            )
+        return img.convert("RGBA")
 
     @staticmethod
-    def _encode_data_url(image: Image.Image, mime_type: str = 'image/jpeg') -> str:
-        buffer = io.BytesIO()
-        output_format = 'JPEG' if mime_type == 'image/jpeg' else 'PNG'
-        save_image = image.convert('RGB') if output_format == 'JPEG' else image
-        kwargs = {'quality': 90} if output_format == 'JPEG' else {}
-        save_image.save(buffer, format=output_format, **kwargs)
-        encoded = __import__('base64').b64encode(buffer.getvalue()).decode('utf-8')
-        return f'data:{mime_type};base64,{encoded}'
+    def _encode_data_url(image: Image.Image, mime_type: str = "image/jpeg") -> str:
+        buf = io.BytesIO()
+        fmt = "JPEG" if mime_type == "image/jpeg" else "PNG"
+        out = image.convert("RGB") if fmt == "JPEG" else image
+        kw  = {"quality": 90, "optimize": True} if fmt == "JPEG" else {}
+        out.save(buf, format=fmt, **kw)
+        return f"data:{mime_type};base64,{base64.b64encode(buf.getvalue()).decode()}"
 
+    # ------------------------------------------------------------------
+    # Text detection  (FIX #3: single-pass contrast analysis, not dark-pixel flood)
+    # ------------------------------------------------------------------
     @staticmethod
-    def _detect_text_regions(image: Image.Image):
-        gray = np.array(image.convert('L'))
-        height, width = gray.shape
+    def _detect_text_regions(image: Image.Image) -> List[TextRegion]:
+        """
+        Locate text regions by finding image blocks that exhibit the
+        speech-bubble signature: high local contrast, a minority of very
+        dark pixels (ink strokes) surrounded by a light background.
 
-        thresholds = [80, 120, 160]
-        grid_size = 10
-        merge_dist = 40
-        sample_offsets = [(2, 2), (7, 2), (2, 7), (7, 7)]
+        Single-pass O(W·H / STRIDE²) scan + greedy merge.
+        """
+        gray = np.array(image.convert("L"), dtype=np.uint8)
+        h, w = gray.shape
 
-        boxes = []
-        for threshold in thresholds:
-            dark_cells = []
-            for gy in range((height + grid_size - 1) // grid_size):
-                for gx in range((width + grid_size - 1) // grid_size):
-                    dark = False
-                    for ox, oy in sample_offsets:
-                        px = min(gx * grid_size + ox, width - 1)
-                        py = min(gy * grid_size + oy, height - 1)
-                        if gray[py, px] < threshold:
-                            dark = True
-                            break
-                    if dark:
-                        dark_cells.append((gx * grid_size, gy * grid_size))
+        BLOCK      = 24     # sample block side (px)
+        STRIDE     = 12     # step between block origins (px)
+        DARK_THR   = 100    # pixel value counted as "ink stroke"
+        LIGHT_THR  = 160    # pixel value counted as "background"
+        MIN_DARK   = 0.03   # minimum ink ratio (avoids blank areas)
+        MAX_DARK   = 0.55   # maximum ink ratio (avoids solid-black art panels)
+        MIN_LIGHT  = 0.25   # minimum background ratio
+        MIN_CTR    = 80     # minimum local contrast (max − min)
+        MERGE_DIST = 48     # merge boxes whose gap ≤ this (px)
+        MIN_W      = 40     # discard merged boxes narrower than this
+        MIN_H      = 30     # discard merged boxes shorter than this
+        PAD        = 10     # padding added around kept regions
 
-            threshold_boxes = []
-            for cell_x, cell_y in dark_cells:
-                merged = False
-                for box in threshold_boxes:
-                    if (
-                        cell_x >= box['minX'] - merge_dist
-                        and cell_x <= box['maxX'] + merge_dist
-                        and cell_y >= box['minY'] - merge_dist
-                        and cell_y <= box['maxY'] + merge_dist
-                    ):
-                        box['minX'] = min(box['minX'], cell_x)
-                        box['minY'] = min(box['minY'], cell_y)
-                        box['maxX'] = max(box['maxX'], cell_x + grid_size)
-                        box['maxY'] = max(box['maxY'], cell_y + grid_size)
-                        merged = True
-                        break
-                if not merged:
-                    threshold_boxes.append({
-                        'minX': cell_x,
-                        'minY': cell_y,
-                        'maxX': cell_x + grid_size,
-                        'maxY': cell_y + grid_size,
-                    })
-            boxes.extend(threshold_boxes)
+        candidates: List[List[int]] = []   # each: [x1, y1, x2, y2]
 
-        final_boxes = []
-        for box in boxes:
-            merged = False
-            for final_box in final_boxes:
-                iou = _iou(box, final_box)
-                if iou > 0.3:
-                    final_box['minX'] = min(final_box['minX'], box['minX'])
-                    final_box['minY'] = min(final_box['minY'], box['minY'])
-                    final_box['maxX'] = max(final_box['maxX'], box['maxX'])
-                    final_box['maxY'] = max(final_box['maxY'], box['maxY'])
-                    merged = True
+        for y in range(0, h - BLOCK + 1, STRIDE):
+            for x in range(0, w - BLOCK + 1, STRIDE):
+                patch = gray[y : y + BLOCK, x : x + BLOCK]
+                if int(patch.max()) - int(patch.min()) < MIN_CTR:
+                    continue
+                sz      = patch.size
+                dark_r  = float((patch < DARK_THR).sum())  / sz
+                light_r = float((patch > LIGHT_THR).sum()) / sz
+                if MIN_DARK <= dark_r <= MAX_DARK and light_r >= MIN_LIGHT:
+                    candidates.append([x, y, x + BLOCK, y + BLOCK])
+
+        # Greedy merge: absorb boxes whose gap to an existing merged box ≤ MERGE_DIST
+        merged: List[List[int]] = []
+        for box in candidates:
+            absorbed = False
+            for m in merged:
+                gap_x = max(0, max(m[0], box[0]) - min(m[2], box[2]))
+                gap_y = max(0, max(m[1], box[1]) - min(m[3], box[3]))
+                if gap_x <= MERGE_DIST and gap_y <= MERGE_DIST:
+                    m[0] = min(m[0], box[0]);  m[2] = max(m[2], box[2])
+                    m[1] = min(m[1], box[1]);  m[3] = max(m[3], box[3])
+                    absorbed = True
                     break
-            if not merged:
-                final_boxes.append(box)
+            if not absorbed:
+                merged.append(list(box))
 
-        regions = []
-        for b in final_boxes:
-            box_w = b['maxX'] - b['minX']
-            box_h = b['maxY'] - b['minY']
-            if box_w <= 30 or box_h <= 30:
+        regions: List[TextRegion] = []
+        for x1, y1, x2, y2 in merged:
+            bw, bh = x2 - x1, y2 - y1
+            if bw < MIN_W or bh < MIN_H:
                 continue
-            aspect = box_w / max(box_h, 1)
-            if aspect < 0.08 or aspect > 12:
+            if not (0.08 <= bw / max(bh, 1) <= 12.0):
                 continue
-
-            x = max(0, b['minX'] - 12)
-            y = max(0, b['minY'] - 12)
-            clamped_w = max(1, min(width, b['maxX'] + 12) - x)
-            clamped_h = max(1, min(height, b['maxY'] + 12) - y)
-            regions.append(TextRegion(x=x, y=y, width=clamped_w, height=clamped_h))
+            rx = max(0, x1 - PAD);  ry = max(0, y1 - PAD)
+            rw = min(w, x2 + PAD) - rx
+            rh = min(h, y2 + PAD) - ry
+            regions.append(TextRegion(x=rx, y=ry, width=max(1, rw), height=max(1, rh)))
 
         return regions
 
+    # ------------------------------------------------------------------
+    # Inpainting
+    # ------------------------------------------------------------------
     @staticmethod
-    def _estimate_fill_color(image: Image.Image, region: TextRegion):
+    def _estimate_fill_color(
+        image: Image.Image, region: TextRegion
+    ) -> Tuple[Tuple[int, int, int], bool]:
         data = np.array(image)
-        x2 = min(region.x + region.width - 1, data.shape[1] - 1)
+        x2 = min(region.x + region.width  - 1, data.shape[1] - 1)
         y2 = min(region.y + region.height - 1, data.shape[0] - 1)
-        points = []
+        pts = []
         for row in range(3):
             for col in range(3):
-                px = int(region.x + (x2 - region.x) * (col / 2))
-                py = int(region.y + (y2 - region.y) * (row / 2))
-                points.append(data[py, px, :3])
-        arr = np.array(points, dtype=np.float32)
+                px = int(region.x + (x2 - region.x) * col / 2)
+                py = int(region.y + (y2 - region.y) * row / 2)
+                pts.append(data[py, px, :3])
+        arr = np.array(pts, dtype=np.float32)
         avg = np.mean(arr, axis=0)
-        std = np.sqrt(np.mean((arr - avg) ** 2))
+        std = float(np.sqrt(np.mean((arr - avg) ** 2)))
         return tuple(int(v) for v in avg), std < 20
 
+    # ------------------------------------------------------------------
+    # Text rendering  (FIX #1: actually use the computed font size)
+    # ------------------------------------------------------------------
     @staticmethod
-    def _draw_wrapped_text(draw: ImageDraw.ImageDraw, region: TextRegion, text: str):
-        if not text.strip():
+    def _draw_wrapped_text(
+        draw: ImageDraw.ImageDraw, region: TextRegion, text: str
+    ) -> None:
+        """
+        Word-wrap *text* inside *region*, picking the largest font size
+        that fits both dimensions.  Renders with a white halo for legibility.
+        """
+        text = text.strip()
+        if not text:
+            return
+        words = text.split()
+        if not words:
             return
 
-        max_font = min(42, int(region.height * 0.3), max(10, int(region.width * 0.15)))
-        font = ImageFont.load_default()
+        max_size = min(42, int(region.height * 0.35), max(10, int(region.width * 0.18)))
 
-        words = text.split(' ')
-        lines = [text]
-        font_size = max_font
+        best_font:  Optional[ImageFont.ImageFont] = None
+        best_lines: Optional[List[str]] = None
+        best_size:  int = 10
 
-        for candidate in range(max_font, 9, -1):
-            test_lines = []
-            current = words[0] if words else ''
+        for size in range(max_size, 9, -1):
+            font  = _get_font(size)          # FIX: load font at this size
+            lines: List[str] = []
+            cur   = words[0]
             for word in words[1:]:
-                probe = f'{current} {word}'
-                bbox = draw.textbbox((0, 0), probe, font=font)
-                if (bbox[2] - bbox[0]) <= region.width - 8:
-                    current = probe
+                probe = f"{cur} {word}"
+                bb    = draw.textbbox((0, 0), probe, font=font)
+                if (bb[2] - bb[0]) <= region.width - 8:
+                    cur = probe
                 else:
-                    test_lines.append(current)
-                    current = word
-            if current:
-                test_lines.append(current)
+                    lines.append(cur)
+                    cur = word
+            lines.append(cur)
 
-            if len(test_lines) * candidate <= region.height - 8 or candidate == 10:
-                lines = test_lines
-                font_size = candidate
+            if len(lines) * size <= region.height - 8:
+                best_font  = font
+                best_lines = lines
+                best_size  = size
                 break
 
-        text_height = len(lines) * font_size
-        start_y = region.y + max(0, (region.height - text_height) // 2)
+        # Nothing fitted — render at minimum size (may overflow)
+        if best_font is None:
+            best_size  = 10
+            best_font  = _get_font(best_size)
+            best_lines = [text]
 
-        for i, line in enumerate(lines):
-            bbox = draw.textbbox((0, 0), line, font=font)
-            text_width = bbox[2] - bbox[0]
-            draw_x = region.x + max(0, (region.width - text_width) // 2)
-            draw_y = start_y + i * font_size
-            draw.text((draw_x + 1, draw_y + 1), line, fill=(255, 255, 255, 230), font=font)
-            draw.text((draw_x, draw_y), line, fill=TEXT_COLOR, font=font)
+        total_h = len(best_lines) * best_size
+        start_y = region.y + max(0, (region.height - total_h) // 2)
 
+        for i, line in enumerate(best_lines):
+            bb  = draw.textbbox((0, 0), line, font=best_font)
+            tw  = bb[2] - bb[0]
+            dx  = region.x + max(0, (region.width - tw) // 2)
+            dy  = start_y + i * best_size
+            # White halo (4-directional outline) for legibility on any background
+            for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((dx + ox, dy + oy), line,
+                          fill=(255, 255, 255, 210), font=best_font)
+            draw.text((dx, dy), line, fill=TEXT_COLOR, font=best_font)
+
+    # ------------------------------------------------------------------
+    # Main pipeline
+    # ------------------------------------------------------------------
     def process(
         self,
         image_data_url: str,
         target_lang: str,
         inpaint_enabled: bool,
         max_width: int,
-    ):
+    ) -> Tuple[str, int]:
         with self.lock:
             self._load_models()
 
             source_image = self._decode_image(image_data_url)
-            mime_type = 'image/jpeg' if image_data_url.startswith('data:image/jpeg') else 'image/png'
+            mime_type = (
+                "image/jpeg"
+                if image_data_url.startswith("data:image/jpeg")
+                else "image/png"
+            )
 
-            if source_image.width > max_width:
-                ratio = max_width / source_image.width
-                resized_h = max(1, int(source_image.height * ratio))
-                source_image = source_image.resize((max_width, resized_h), Image.LANCZOS)
+            try:
+                if source_image.width > max_width:
+                    ratio = max_width / source_image.width
+                    new_h = max(1, int(source_image.height * ratio))
+                    source_image = source_image.resize((max_width, new_h), Image.LANCZOS)
 
-            boxes = self._detect_text_regions(source_image)
-            translated_lines = []
+                boxes = self._detect_text_regions(source_image)
 
-            for region in boxes:
-                crop = source_image.crop((region.x, region.y, region.x + region.width, region.y + region.height)).convert('RGB')
-
-                japanese_text = ''
-                try:
-                    japanese_text = self.ocr(crop).strip() if self.ocr else ''
-                except Exception:
-                    japanese_text = ''
-
-                if japanese_text:
+                # --- Collect texts ---
+                raw_texts: List[str] = []
+                for region in boxes:
+                    if region.width < MIN_OCR_CROP_PX or region.height < MIN_OCR_CROP_PX:
+                        raw_texts.append("")
+                        continue
+                    crop = source_image.crop(
+                        (region.x, region.y,
+                         region.x + region.width,
+                         region.y + region.height)
+                    ).convert("RGB")
                     try:
-                        out = self.translator(
-                            japanese_text,
-                            src_lang='jpn_Jpan',
-                            tgt_lang=target_lang
+                        raw_texts.append((self.ocr(crop) or "").strip())
+                    except Exception as exc:
+                        logger.warning("[LMT] OCR failed for %s: %s", region, exc)
+                        raw_texts.append("")
+
+                # --- Batch translate (FIX: single call per non-empty group) ---
+                non_empty = [(i, t) for i, t in enumerate(raw_texts) if t]
+                translated_lines: List[str] = [""] * len(boxes)
+                if non_empty:
+                    indices, texts = zip(*non_empty)
+                    try:
+                        results = self.translator(
+                            list(texts),
+                            src_lang="jpn_Jpan",
+                            tgt_lang=target_lang,
                         )
-                        translated_lines.append(out[0].get('translation_text', '').strip())
-                    except Exception:
-                        translated_lines.append('')
-                else:
-                    translated_lines.append('')
+                        for idx, res in zip(indices, results):
+                            translated_lines[idx] = (
+                                res.get("translation_text") or ""
+                            ).strip()
+                    except Exception as exc:
+                        logger.warning("[LMT] Batch translation failed: %s", exc)
 
-            draw = ImageDraw.Draw(source_image, 'RGBA')
+                # --- Render ---
+                draw = ImageDraw.Draw(source_image, "RGBA")
+                for idx, region in enumerate(boxes):
+                    t_text = translated_lines[idx]
+                    if inpaint_enabled:
+                        fill_rgb, _ = self._estimate_fill_color(source_image, region)
+                        draw.rectangle(
+                            [region.x, region.y,
+                             region.x + region.width  - 1,
+                             region.y + region.height - 1],
+                            fill=(*fill_rgb, 255),
+                        )
+                    else:
+                        draw.rectangle(
+                            [region.x, region.y,
+                             region.x + region.width  - 1,
+                             region.y + region.height - 1],
+                            fill=TEXT_BACKGROUND,
+                        )
+                    self._draw_wrapped_text(draw, region, t_text)
 
-            for idx, region in enumerate(boxes):
-                if inpaint_enabled:
-                    fill_rgb, _ = self._estimate_fill_color(source_image, region)
-                    draw.rectangle(
-                        (region.x, region.y, region.x + region.width, region.y + region.height),
-                        fill=(*fill_rgb, 255)
-                    )
-                else:
-                    draw.rectangle(
-                        (region.x, region.y, region.x + region.width, region.y + region.height),
-                        fill=TEXT_BACKGROUND
-                    )
+                self._touch()
+                return self._encode_data_url(source_image, mime_type), len(boxes)
 
-                self._draw_wrapped_text(draw, region, translated_lines[idx] if idx < len(translated_lines) else '')
-
-            self._touch()
-            return self._encode_data_url(source_image, mime_type), len(boxes)
-
-
-def _iou(box1, box2):
-    x1 = max(box1['minX'], box2['minX'])
-    y1 = max(box1['minY'], box2['minY'])
-    x2 = min(box1['maxX'], box2['maxX'])
-    y2 = min(box1['maxY'], box2['maxY'])
-
-    if x2 < x1 or y2 < y1:
-        return 0.0
-
-    inter = (x2 - x1) * (y2 - y1)
-    area1 = (box1['maxX'] - box1['minX']) * (box1['maxY'] - box1['minY'])
-    area2 = (box2['maxX'] - box2['minX']) * (box2['maxY'] - box2['minY'])
-    union = max(1, area1 + area2 - inter)
-    return inter / union
+            finally:
+                source_image.close()   # FIX: release PIL memory promptly

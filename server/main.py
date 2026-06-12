@@ -1,22 +1,29 @@
 import asyncio
+import base64
+import logging
 from contextlib import asynccontextmanager
 import ipaddress
 import os
 import socket
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, ParseResult
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
 from model_loader import TranslationEngine
 
 load_dotenv() # Load environment variables from .env file
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+MAX_DATA_URL_CHARS = 28_000_000   # ~20 MB raw image limit
 
 FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT_SECONDS = 60
@@ -29,7 +36,10 @@ engine = TranslationEngine()
 async def memory_janitor():
     while True:
         await asyncio.sleep(30) # Check every 30 seconds
-        engine.cleanup_if_expired()
+        try:
+            engine.cleanup_if_expired()
+        except Exception:
+            logger.exception("[LMT] Memory janitor error — janitor will retry")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -61,6 +71,15 @@ class TranslateRequest(BaseModel):
     inpaintEnabled: bool = Field(default=True)
     maxWidth: int = Field(default=1280, ge=256, le=4096)
 
+    @field_validator('imageDataUrl')
+    @classmethod
+    def _check_payload_size(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v) > MAX_DATA_URL_CHARS:
+            raise ValueError(
+                f'imageDataUrl exceeds {MAX_DATA_URL_CHARS // 1_000_000} MB limit'
+            )
+        return v
+
 
 class TranslateResponse(BaseModel):
     ok: bool
@@ -74,7 +93,7 @@ async def health():
     return {'ok': True}
 
 
-def _validate_source_url(source_url: str):
+def _validate_source_url(source_url: str) -> ParseResult:
     try:
         parsed = urlparse(source_url)
     except Exception as exc:
@@ -93,9 +112,12 @@ def _validate_source_url(source_url: str):
 
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
-            raise HTTPException(status_code=400, detail='Source URL host is not allowed')
-        return
+        # Block ALL direct IP addresses (public and private).
+        # Legitimate manga CDNs use hostnames subject to the allowlist.
+        raise HTTPException(
+            status_code=400,
+            detail='Direct IP-address URLs are not supported',
+        )
     except ValueError:
         pass
 
@@ -152,7 +174,7 @@ async def _fetch_image_as_data_url(source_url: str, page_url: Optional[str]) -> 
         raise HTTPException(status_code=502, detail=f'Image fetch failed ({response.status_code})')
 
     mime_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip() or 'image/jpeg'
-    b64 = __import__('base64').b64encode(response.content).decode('utf-8')
+    b64 = base64.b64encode(response.content).decode('utf-8')
     return f'data:{mime_type};base64,{b64}'
 
 
