@@ -71,30 +71,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      if (message?.type === 'FETCH_HEALTH') {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), message.timeoutMs || 500);
-          const response = await fetch(`${message.serverBase}/health`, {
-            method: 'GET',
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          sendResponse({ ok: response.ok });
-        } catch (e) {
-          sendResponse({ ok: false, error: e.message });
-        }
-        return;
-      }
-
-      if (message?.type === 'FETCH_TRANSLATE') {
+      if (message?.type === 'PROXY_FETCH') {
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), message.timeoutMs || 120000);
-          const response = await fetch(`${message.serverBase}/translate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(message.payload),
+          const response = await fetch(message.url, {
+            ...message.options,
             signal: controller.signal
           });
           clearTimeout(timeoutId);
@@ -106,21 +88,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             data = null;
           }
 
-          if (!response.ok) {
-            sendResponse({ ok: false, error: data?.detail || data?.error || `Server error (${response.status})` });
-            return;
-          }
-
-          if (!data?.ok || !data.translatedDataUrl) {
-            sendResponse({ ok: false, error: data?.error || 'Server returned invalid translation response' });
-            return;
-          }
-
-          sendResponse({ ok: true, data });
+          sendResponse({ ok: response.ok, status: response.status, data });
         } catch (e) {
           sendResponse({ ok: false, error: e.message });
         }
-        return;
+        return true;
       }
 
       sendResponse({ ok: false, error: 'Unknown message type' });

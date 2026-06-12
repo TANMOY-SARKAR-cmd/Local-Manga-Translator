@@ -119,8 +119,9 @@
     if (!isValidServerBase(serverBase)) return false;
     try {
       const response = await chrome.runtime.sendMessage({
-        type: 'FETCH_HEALTH',
-        serverBase,
+        type: 'PROXY_FETCH',
+        url: `${serverBase}/health`,
+        options: { method: 'GET' },
         timeoutMs
       });
       return !!response?.ok;
@@ -194,14 +195,22 @@
       try {
         updateOverlay(requestId, `Translating on server (${attempt}/${attempts})...`);
         const response = await chrome.runtime.sendMessage({
-          type: 'FETCH_TRANSLATE',
-          serverBase,
-          payload,
+          type: 'PROXY_FETCH',
+          url: `${serverBase}/translate`,
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          },
           timeoutMs
         });
 
         if (!response?.ok) {
-          throw new Error(response?.error || 'Translation request failed');
+          throw new Error(response?.data?.detail || response?.data?.error || response?.error || `Server error (${response?.status})`);
+        }
+
+        if (!response?.data?.ok || !response?.data?.translatedDataUrl) {
+          throw new Error(response?.data?.error || 'Server returned invalid translation response');
         }
 
         return response.data;
@@ -406,27 +415,39 @@
 
   function revertBySrc(srcUrl) {
     if (!srcUrl) return;
+
+    // First, standard findElementBySrc
     const found = findElementBySrc(srcUrl, true);
 
-    if (!found || !found.element.dataset.lmtOriginalSrc) return;
-    const { element, type } = found;
+    if (found && found.element.dataset.lmtOriginalSrc) {
+      const { element, type } = found;
 
-    if (type === 'img') {
-      element.src = element.dataset.lmtOriginalSrc;
-    } else if (type === 'bg') {
-      element.style.backgroundImage = `url('${element.dataset.lmtOriginalSrc}')`;
-    } else if (type === 'canvas') {
-      if (element.dataset.lmtOriginalData) {
-        const originalImg = new Image();
-        originalImg.onload = () => {
-          const ctx = element.getContext('2d');
-          if (ctx) ctx.drawImage(originalImg, 0, 0, element.width, element.height);
-        };
-        originalImg.src = element.dataset.lmtOriginalData;
+      if (type === 'img') {
+        element.src = element.dataset.lmtOriginalSrc;
+      } else if (type === 'bg') {
+        element.style.backgroundImage = `url('${element.dataset.lmtOriginalSrc}')`;
+      } else if (type === 'canvas') {
+        if (element.dataset.lmtOriginalData) {
+          const originalImg = new Image();
+          originalImg.onload = () => {
+            const ctx = element.getContext('2d');
+            if (ctx) ctx.drawImage(originalImg, 0, 0, element.width, element.height);
+          };
+          originalImg.src = element.dataset.lmtOriginalData;
+        }
       }
+      element.dataset.lmtTranslated = '0';
+      return;
     }
 
-    element.dataset.lmtTranslated = '0';
+    // Secondary DOM search for CSS background elements if not found by primary method
+    const bgElements = Array.from(document.querySelectorAll('div, span, a'));
+    for (const bg of bgElements) {
+      if (bg.dataset.lmtOriginalSrc === srcUrl) {
+        bg.style.backgroundImage = `url('${bg.dataset.lmtOriginalSrc}')`;
+        bg.dataset.lmtTranslated = '0';
+      }
+    }
   }
 
 
