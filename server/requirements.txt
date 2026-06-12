@@ -1,9 +1,16 @@
-fastapi==0.115.6
-uvicorn==0.32.1
-pillow==12.2.0
-numpy==2.1.3
-torch==2.12.0
-transformers==5.9.0
-manga-ocr==0.1.14
-httpx==0.28.1
-python-dotenv
+# Core server
+fastapi>=0.115.0,<2.0
+uvicorn>=0.30.0,<2.0
+python-dotenv>=1.0.0
+httpx>=0.25.0,<1.0
+pydantic>=2.0.0,<3.0
+
+# Image processing
+pillow>=10.0.0
+numpy>=1.24.0,<3.0
+opencv-python-headless>=4.8.0   # enables cv2.inpaint for better background removal
+
+# AI / ML
+torch>=2.0.0
+transformers>=4.35.0
+manga-ocr>=0.1.10               # VisionEncoderDecoder OCR for manga

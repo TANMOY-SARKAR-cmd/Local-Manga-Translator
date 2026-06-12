@@ -17,15 +17,18 @@ async function sendToTab(tabId, payload) {
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureDefaults();
 
-  chrome.contextMenus.create({
-    id: 'translate-image',
-    title: 'Translate manga image',
-    contexts: ['image']
-  });
-  chrome.contextMenus.create({
-    id: 'revert-image',
-    title: 'Revert translated image',
-    contexts: ['image']
+  // Remove first — prevents "ID already exists" errors on extension update
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'translate-image',
+      title: 'Translate manga image',
+      contexts: ['image']
+    });
+    chrome.contextMenus.create({
+      id: 'revert-image',
+      title: 'Revert translated image',
+      contexts: ['image']
+    });
   });
 });
 

@@ -228,6 +228,9 @@
     const { element, type, originalSrc } = item;
     const requestId = existingRequestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    // Mark the element as in-flight so the MutationObserver doesn't re-queue it
+    element.dataset.lmtProcessing = '1';
+
     // --- FIX 1: Extract Canvas Data early to create a unique ID ---
     let imageDataUrl = null;
     let uniqueIdentifier = originalSrc;
@@ -300,6 +303,7 @@
       element.dataset.lmtFailed = '1';
     } finally {
       STATE.activeRequests.delete(requestId);
+      delete element.dataset.lmtProcessing;   // release the in-flight lock
       setTimeout(() => removeOverlay(requestId), 1200);
     }
   }
@@ -468,7 +472,7 @@
         const settings = await getSettings();
 
         for (const img of dynamicallyAddedImages) {
-          if (!STATE.activeRequests.has(img.dataset.lmtOriginalSrc || img.src) && !img.dataset.lmtTranslated && !img.dataset.lmtFailed) {
+          if (!img.dataset.lmtProcessing && !img.dataset.lmtTranslated && !img.dataset.lmtFailed) {
             const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
             let overlay = STATE.overlays.get(requestId);
             if (!overlay) {
